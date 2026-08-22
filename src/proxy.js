@@ -98,18 +98,22 @@ function readAuthCreds(pyPath) {
   return user;
 }
 
-/** 按命令行特征找 hysteria client 进程（start.sh 用相对路径 -c config.yaml 启动）。 */
+/**
+ * 按命令行特征找 hysteria client 进程。
+ * 用字符类技巧（[h]ysteria）防止 pgrep -f 匹配到 pgrep/bash 自身（命令行含同样模式串）。
+ * start.sh 用相对路径（-c config.yaml），插件用绝对路径（-c <home>/config.yaml），两种都覆盖。
+ */
 function findHysteriaPids(home) {
   if (isWin) return pidsFromPidFile(expandHome(home), "hysteria.pid");
-  const r = spawnSync("pgrep", ["-f", "hysteria client -c .*config.yaml"], { encoding: "utf8" });
+  const r = spawnSync("pgrep", ["-f", "[h]ysteria client -c .*config\\.ya?ml"], { encoding: "utf8" });
   if (r.status !== 0) return [];
   return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean).map(Number);
 }
 
-/** 按命令行特征找 auth-proxy 进程（兼容内置 Node authproxy.js 与旧 python3 auth-proxy.py）。 */
+/** 按命令行特征找 auth-proxy 进程（兼容内置 Node authproxy.js 与旧 python3 auth-proxy.py；同样防自匹配）。 */
 function findAuthProxyPids(home) {
   if (isWin) return pidsFromPidFile(expandHome(home), "auth-proxy.pid");
-  const r = spawnSync("pgrep", ["-f", "authproxy\\.js|python3 .*auth-proxy\\.py"], { encoding: "utf8" });
+  const r = spawnSync("pgrep", ["-f", "[a]uthproxy\\.js|[p]ython3 .*[a]uth-proxy\\.py"], { encoding: "utf8" });
   if (r.status !== 0) return [];
   return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean).map(Number);
 }
@@ -287,6 +291,11 @@ export function createProxyOps(config) {
         ["client", "-c", join(homeDir, "config.yaml")],
         { cwd: homeDir, detached: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
       );
+      child.on("error", (e) => {
+        // 可执行文件缺失/无权限等：记录日志，不崩溃（无 error 监听时 Node 会抛出未捕获异常终止进程）
+        out.spawnError = `${hysteriaBin} 启动失败：${e.message}`;
+        try { appendFileSync(join(homeDir, "client.log"), `\n${new Date().toISOString()} [plugin] ${out.spawnError}\n`); } catch { /* noop */ }
+      });
       child.stdout.on("data", (d) => appendFileSync(join(homeDir, "client.log"), d));
       child.stderr.on("data", (d) => appendFileSync(join(homeDir, "client.log"), d));
       child.unref();
@@ -312,6 +321,10 @@ export function createProxyOps(config) {
           env: { ...process.env, AUTH_PROXY_USER: c.name, AUTH_PROXY_PASS: c.pass },
         },
       );
+      child.on("error", (e) => {
+        out.spawnError = out.spawnError ? `${out.spawnError}; auth-proxy 启动失败：${e.message}` : `auth-proxy 启动失败：${e.message}`;
+        try { appendFileSync(join(homeDir, "auth-proxy.log"), `\n${new Date().toISOString()} [plugin] auth-proxy 启动失败：${e.message}\n`); } catch { /* noop */ }
+      });
       child.stdout.on("data", (d) => appendFileSync(join(homeDir, "auth-proxy.log"), d));
       child.stderr.on("data", (d) => appendFileSync(join(homeDir, "auth-proxy.log"), d));
       child.unref();
