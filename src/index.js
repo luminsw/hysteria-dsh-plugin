@@ -16,6 +16,7 @@ import z from "@deepseek-ai/schemastery";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { settingsNamespace, installSettingsSection } from "@deepseek-ai/dsh-settings";
 import { createProxyOps } from "./proxy.js";
+import { startAutoProxy } from "./autoproxy.js";
 
 export const name = "dsh-hysteria-proxy";
 
@@ -63,6 +64,27 @@ export const Config = z.object({
   /** 连通性检测目标 URL（应返回 2xx/204）。 */
   checkUrl: z.string().default("https://www.gstatic.com/generate_204"),
   /**
+   * 按需代理守护（on-demand）：平时直连，检测到访问失败/变慢时自动启用代理并让 git/npm 走代理，
+   * 直连恢复稳定后自动停代理回直连。false=关闭（默认，手动 proxy_start/stop）。
+   */
+  autoProxy: z.boolean().default(false),
+  /** 直连探测间隔（ms）。 */
+  probeIntervalMs: z.number().default(30000),
+  /** 直连探测目标（不达标即触发代理）。 */
+  probeTargets: z.array(z.string()).default(["https://github.com", "https://registry.npmjs.org"]),
+  /** 直连响应超过该值（ms）视为"慢"，触发代理。 */
+  slowThresholdMs: z.number().default(2000),
+  /** 直连请求超时（ms）视为"失败"，触发代理。 */
+  failThresholdMs: z.number().default(10000),
+  /** 触发后至少保持代理时长（ms），防抖动。 */
+  minActiveMs: z.number().default(300000),
+  /** 直连连续健康多久（ms）后停代理回直连。 */
+  idleStopMs: z.number().default(120000),
+  /** 触发时自动 git config --global 注入/清除 http.proxy/https.proxy。 */
+  applyToGit: z.boolean().default(true),
+  /** 触发时自动 npm config 注入/清除 proxy/https-proxy。 */
+  applyToNpm: z.boolean().default(true),
+  /**
    * 阿里云安全组配置（出口 IP 变化自动修复用；默认不启用）。
    * 例：{ regionId: "ap-northeast-1", securityGroupId: "sg-xxx", cli: "aliyun",
    *       ports: [{ protocol: "udp", port: "443/443" }, { protocol: "tcp", port: "22/22" }, { protocol: "icmp", port: "-1/-1" }] }
@@ -72,6 +94,13 @@ export const Config = z.object({
 
 export function apply(ctx, config) {
   const proxy = createProxyOps(config);
+
+  // ---------- 按需代理守护（autoProxy）：平时直连，失败/变慢自动启用代理，恢复自动停 ----------
+  let autoProxy = null;
+  if (config.autoProxy) {
+    autoProxy = startAutoProxy({ proxy, config, log: (m) => console.log(m) });
+    ctx.onDispose(() => autoProxy?.dispose());
+  }
 
   // ---------- DSH 设置页命名空间（让「Hysteria 代理」卡片在 DSH UI 设置页渲染）----------
   installSettingsSection(ctx, SETTINGS_NS, Config, config, {
@@ -89,6 +118,15 @@ export function apply(ctx, config) {
     lines.push(`连通性: ${st.connected ? "✅ 可访问外网" : "❌ 代理不可达外网"}`);
     if (st.egressIp) lines.push(`本机出口 IP: ${st.egressIp}${st.proxyEgressIp ? `（经代理出口 ${st.proxyEgressIp}）` : ""}`);
     if (st.creds) lines.push(`auth 凭据: ${st.creds.name}（来源 ${st.creds.source}）`);
+    if (st.autoproxy) {
+      const ap = st.autoproxy;
+      const probe = ap.lastProbe
+        ? ap.lastProbe.bad.length
+          ? `直连异常：${ap.lastProbe.bad.map((b) => `${b.target}(${b.error || b.ms + "ms"})`).join(", ")}`
+          : `直连健康（${ap.lastProbe.results.map((r) => `${r.target} ${r.ms}ms`).join(" / ")}）`
+        : "探测中…";
+      lines.push(`按需模式: ${ap.state === "proxied" ? "🟢 已启用代理" : "⚪ 直连"}（${probe}）`);
+    }
     lines.push(`监听: ${st.listen || "127.0.0.1"}（仅本机${st.server ? `；服务器 ${st.server}` : ""}）`);
     lines.push(`配置目录: ${st.home}`);
     return lines.join("\n");
@@ -103,6 +141,7 @@ export function apply(ctx, config) {
       output: { schema: { type: "string" }, render: (_a, v) => [{ type: "text", text: v }] },
       async execute() {
         const st = await proxy.status();
+        st.autoproxy = autoProxy?.state() ?? null;
         return formatStatus(st);
       },
     }),
@@ -207,6 +246,7 @@ export function apply(ctx, config) {
   const webServer = ctx.get("webServer");
   const statusUiHandler = async (req, res) => {
     const st = await proxy.status();
+    st.autoproxy = autoProxy?.state() ?? null;
     const body = JSON.stringify({
       ok: st.ok,
       connected: st.connected,
@@ -215,6 +255,7 @@ export function apply(ctx, config) {
       ports: st.ports,
       egressIp: st.egressIp,
       proxyEgressIp: st.proxyEgressIp,
+      autoproxy: st.autoproxy,
       home: st.home,
       credsUser: st.creds?.name ?? null,
       aliyunConfigured: !!config.aliyun?.securityGroupId,

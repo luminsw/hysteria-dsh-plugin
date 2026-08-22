@@ -84,6 +84,33 @@ export ALL_PROXY=socks5://127.0.0.1:1080
 - 代理目录：`config.yaml`（hysteria2 客户端配置）——**缺失时插件按 `server`/`serverAuth` 参数自动生成，无需手写**
 - 带鉴权转发层为**内置 Node 实现**，不需要 python
 
+## 按需代理（autoProxy）：平时直连，访问不了/变慢自动启用
+
+需求：**平时不用代理**；检测到直连访问失败或明显变慢时，**自动启动代理并让 git/npm 走代理**；直连恢复稳定后自动停代理回直连。全程无需人工介入。
+
+```yaml
+config:
+  autoProxy: true                  # 开启按需守护（默认 false=手动启停）
+  probeIntervalMs: 30000           # 直连探测间隔
+  probeTargets:                    # 探测目标（默认 github + npm registry）
+    - 'https://github.com'
+    - 'https://registry.npmjs.org'
+  slowThresholdMs: 2000            # 直连 >2s 视为"慢"→ 触发
+  failThresholdMs: 10000           # 直连 >10s 视为"失败"→ 触发
+  minActiveMs: 300000              # 触发后至少保持 5 分钟（防抖动）
+  idleStopMs: 120000               # 直连连续健康 2 分钟 → 停代理
+  applyToGit: true                 # 触发时自动注入/清除 git 全局 http.proxy/https.proxy
+  applyToNpm: true                 # 触发时自动注入/清除 npm config proxy/https-proxy
+```
+
+行为：
+- 每 probeIntervalMs 直连探测 probeTargets（Node fetch，不走代理）
+- 任一目标失败或超阈值 → proxy_start + 注入 git/npm 代理
+- 直连恢复且稳定 idleStopMs（并已过 minActiveMs）→ proxy_stop + 清除注入
+- 状态见 proxy_status（"按需模式: 🟢 已启用代理 / ⚪ 直连 + 探测明细"）与设置页卡片
+
+> 注意：applyToGit/applyToNpm 会改全局配置（git config --global / npm config），触发时写入、恢复时清除；介意侵入性可设 false，触发后由 agent 手动带 HTTPS_PROXY 重试。
+
 ## 安全（默认仅本机，本机之外不可访问）
 
 - **监听地址**：插件生成的 config.yaml 默认 `http/socks5` 都只监听 `127.0.0.1`——只有本机能用代理，局域网/公网无法访问。需要改监听地址时用配置项 `listen`。
