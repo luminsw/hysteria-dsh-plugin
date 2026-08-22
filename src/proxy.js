@@ -106,10 +106,10 @@ function findHysteriaPids(home) {
   return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean).map(Number);
 }
 
-/** 按命令行特征找 auth-proxy 进程（相对路径 python3 auth-proxy.py）。 */
+/** 按命令行特征找 auth-proxy 进程（兼容内置 Node authproxy.js 与旧 python3 auth-proxy.py）。 */
 function findAuthProxyPids(home) {
   if (isWin) return pidsFromPidFile(expandHome(home), "auth-proxy.pid");
-  const r = spawnSync("pgrep", ["-f", "python3 .*auth-proxy.py"], { encoding: "utf8" });
+  const r = spawnSync("pgrep", ["-f", "authproxy\\.js|python3 .*auth-proxy\\.py"], { encoding: "utf8" });
   if (r.status !== 0) return [];
   return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean).map(Number);
 }
@@ -123,9 +123,17 @@ function portListening(port) {
     const re = new RegExp(`:${port}\\s`);
     return r.stdout.split("\n").some((l) => re.test(l) && l.includes("LISTENING"));
   }
+  // POSIX：优先 ss（iproute2）；缺失（Alpine 等精简系统）回退 /proc/net/tcp（Linux 必有）
   const r = spawnSync("ss", ["-tln"], { encoding: "utf8" });
-  if (r.status !== 0) return false;
-  return r.stdout.split("\n").some((l) => l.includes(`:${port}`));
+  if (r.status === 0) return r.stdout.split("\n").some((l) => l.includes(`:${port}`));
+  try {
+    const hex = port.toString(16).toUpperCase().padStart(4, "0");
+    return readFileSync("/proc/net/tcp", "utf8")
+      .split("\n")
+      .some((l) => l.includes(`:${hex} `) && /\s0A\s/.test(l)); // 0A = LISTEN
+  } catch {
+    return false;
+  }
 }
 
 function killPids(pids, label) {
