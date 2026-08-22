@@ -84,7 +84,22 @@ export ALL_PROXY=socks5://127.0.0.1:1080
 - 代理目录：`config.yaml`（hysteria2 客户端配置）——**缺失时插件按 `server`/`serverAuth` 参数自动生成，无需手写**
 - 带鉴权转发层为**内置 Node 实现**，不需要 python
 
-## 按需代理（autoProxy）：平时直连，访问不了/变慢自动启用
+## 任务内失败兜底（推荐）：遇到访问不了/下载慢时自动用代理
+
+**不探测、不轮询**：平时直连零介入；执行任务遇到直连失败或变慢时，自动启用代理并重试。agent 在跑 git push / npm install / curl 等外网任务失败时直接调用：
+
+```
+proxy_retry { command: 'git push origin main' }
+proxy_retry { command: 'npm install' }
+```
+
+行为：先直连执行一次 → 非 0 退出/超时 → 自动 proxy_start → 带 HTTPS_PROXY/HTTP_PROXY 环境重试一次 → 返回两次结果。网络正常时只走直连，代理完全不参与。
+
+> 也可以只调 proxy_start（幂等）后手动带 HTTPS_PROXY 重试，效果相同。
+
+## 可选：autoProxy 轮询守护（默认关，一般不需要）
+
+如果不采用任务内兜底、想让代理**提前**感知网络变化，可开轮询模式：
 
 需求：**平时不用代理**；检测到直连访问失败或明显变慢时，**自动启动代理并让 git/npm 走代理**；直连恢复稳定后自动停代理回直连。全程无需人工介入。
 

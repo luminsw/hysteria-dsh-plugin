@@ -17,6 +17,7 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { settingsNamespace, installSettingsSection } from "@deepseek-ai/dsh-settings";
 import { createProxyOps } from "./proxy.js";
 import { startAutoProxy } from "./autoproxy.js";
+import { spawnSync } from "node:child_process";
 
 export const name = "dsh-hysteria-proxy";
 
@@ -206,6 +207,54 @@ export function apply(ctx, config) {
       async execute() {
         const ok = await proxy.check();
         return ok ? "✅ 代理连通，可访问外网" : "❌ 代理不可达外网（检查 hysteria 是否运行、服务器是否可连）";
+      },
+    }),
+  );
+
+  // 跨平台 shell 执行（Windows cmd /c，POSIX /bin/sh -c），可附加代理环境变量
+  const runShell = (cmd, extraEnv = {}, timeoutMs) => {
+    const env = { ...process.env, ...extraEnv };
+    const argv =
+      process.platform === "win32"
+        ? [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", cmd]]
+        : ["/bin/sh", ["-c", cmd]];
+    try {
+      const r = spawnSync(argv[0], argv[1], { encoding: "utf8", timeout: timeoutMs, env, maxBuffer: 8 * 1024 * 1024 });
+      const out = (r.stdout || "").trim();
+      const err = (r.stderr || "").trim();
+      return { code: r.status ?? -1, output: out + (err ? "\n[stderr] " + err : "") };
+    } catch (e) {
+      return { code: -1, output: "spawn error: " + e.message };
+    }
+  };
+
+  ctx.tools.register(
+    defineTool({
+      name: "proxy_retry",
+      description:
+        "执行命令，直连失败（非 0 退出或超时）时自动启用代理并以 HTTPS_PROXY/HTTP_PROXY 环境变量重试一次。用于 git push / npm install / curl 等外网任务：遇到不能访问或下载慢时自动走代理，网络正常时直连不受影响。宿主机操作。",
+      parameters: {
+        command: { type: "string", description: "要执行的命令，如 'git push origin main' 或 'npm install'" },
+        timeoutMs: { type: "number", description: "单次执行超时（ms），默认 120000" },
+      },
+      output: { schema: { type: "string" }, render: (_a, v) => [{ type: "text", text: v }] },
+      async execute(args) {
+        const cmd = String(args.command || "").trim();
+        if (!cmd) return "请提供 command（如 git push origin main / npm install）";
+        const timeout = Number(args.timeoutMs) || 120000;
+        const httpUrl = "http://127.0.0.1:" + (Number(config.httpPort) || 7890);
+        const socksUrl = "socks5://127.0.0.1:" + (Number(config.socksPort) || 1080);
+        const direct = runShell(cmd, {}, timeout);
+        if (direct.code === 0) return "✅ 直连成功\n" + (direct.output || "(无输出)");
+        const st = await proxy.status();
+        if (!st.hysteria.running) {
+          const r = await proxy.start();
+          if (!r.ok) return "❌ 直连失败，且代理启动失败：" + r.error + "\n\n直连输出：\n" + (direct.output || "(无输出)");
+        }
+        const proxied = runShell(cmd, { HTTPS_PROXY: httpUrl, HTTP_PROXY: httpUrl, ALL_PROXY: socksUrl }, timeout);
+        if (proxied.code === 0)
+          return "✅ 直连失败，自动启用代理并重试成功\n\n直连输出：\n" + (direct.output || "(无输出)") + "\n\n代理重试输出：\n" + (proxied.output || "(无输出)");
+        return "❌ 直连与代理均失败\n\n直连输出：\n" + (direct.output || "(无输出)") + "\n\n代理输出：\n" + (proxied.output || "(无输出)");
       },
     }),
   );
