@@ -164,7 +164,7 @@ function logTo(home, file, lines) {
 
 export function createProxyOps(config) {
   const home = config.home || "~/.hysteria";
-  const hysteriaBin = config.hysteriaBin || "hysteria";
+  const hysteriaBin = config.hysteriaBin ? expandHome(config.hysteriaBin) : "hysteria";
   const httpPort = Number(config.httpPort) || 7890;
   const socksPort = Number(config.socksPort) || 1080;
   const authPort = Number(config.authPort) || 7891;
