@@ -1,0 +1,43 @@
+{
+  "name": "hysteria-dsh-plugin",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Hysteria 2 代理管理 DSH 插件：在 DeepSeek Harness 里直接管理本机 hysteria 客户端与 auth-proxy（启动/停止/重启/状态/连通性检测），开发时网络不通（git push、npm install 等）自动走代理。",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": {
+      "default": "./src/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "hysteria",
+    "proxy",
+    "vpn"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.7"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.0"
+  },
+  "scripts": {}
+}

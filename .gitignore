@@ -1,0 +1,9 @@
+# 敏感文件：绝不提交 hysteria 私有配置/凭据/日志
+# （注意：cordis.patch.yml 是本插件必需的公开配置，不能被忽略）
+config.yaml
+config.yml
+client.log
+auth-proxy.log
+*.log
+.env
+node_modules/

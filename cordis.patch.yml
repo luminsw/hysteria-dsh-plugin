@@ -1,0 +1,16 @@
+# hysteria-dsh-plugin 组合包 patch：注册本机 hysteria 代理管理工具。
+#
+# 安装本包（dsh plugin --profile web add github:luminsw/hysteria-dsh-plugin）后，
+# profile 组合会自动应用本层。配置默认即可用（hysteria 目录默认 ~/.hysteria）；
+# 如需覆盖，在 profile 自己的 cordis.patch.yml 里按 id 覆盖 config：
+#   - id: dsh-hysteria-proxy
+#     config:
+#       home: '~/.hysteria'
+#       hysteriaBin: 'hysteria'
+#       httpPort: 7890
+#       socksPort: 1080
+#       authPort: 7891
+
+- insert:
+    - id: dsh-hysteria-proxy
+      name: hysteria-dsh-plugin
