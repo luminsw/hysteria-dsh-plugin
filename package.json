@@ -9,12 +9,16 @@
     ".": {
       "default": "./src/index.js"
     },
+    "./client": {
+      "default": "./client.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
     "src",
+    "client.js",
     "cordis.patch.yml"
   ],
   "license": "MIT",
@@ -30,6 +34,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ]
     }
   },
   "peerDependencies": {
