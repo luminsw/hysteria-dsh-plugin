@@ -21,7 +21,9 @@
 dsh plugin --profile web add /home/lumin/src/mdyj/hysteria-dsh-plugin
 # 或 dsh plugin --profile web add github:luminsw/hysteria-dsh-plugin
 # 配置覆盖（可选，默认即可用）：
-#   ~/.dsh/profiles/web/cordis.patch.yml → id: dsh-hysteria-proxy → config: { home, hysteriaBin, server, serverAuth, listen, httpPort, socksPort, authPort, authUser, authPass, checkUrl }
+#   ~/.dsh/profiles/web/cordis.patch.yml → id: dsh-hysteria-proxy → config: { home, hysteriaBin, server | serverEnv, serverAuth | serverAuthEnv, listen, httpPort, socksPort, authPort, authUser, authPass, checkUrl }
+#   server/serverAuth 支持环境变量传值：填 serverEnv: 'HYSTERIA_SERVER' / serverAuthEnv: 'HYSTERIA_SERVER_AUTH'（变量名），
+#   启动 DSH 前 export 即可，密码不落配置文件。
 ```
 
 改代码后重启 DSH 生效：`pkill -f "dsh web"; npx @deepseek-ai/dsh web`（或 `bh_dsh_restart`）。

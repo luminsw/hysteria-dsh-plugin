@@ -32,10 +32,18 @@ export const Config = z.object({
   /**
    * 代理服务器地址（"host:port"，如 "8.216.46.73:443"）。
    * config.yaml 缺失时据此自动生成 hysteria2 客户端配置——用户只填参数即可架起代理，无需手写配置。
+   * 也可只填 serverEnv（环境变量名），运行时从环境变量读取。
    */
   server: z.string().default(""),
+  /** 服务器地址的环境变量名（如 HYSTERIA_SERVER），优先于 server。 */
+  serverEnv: z.string().default(""),
   /** hysteria 服务器 auth 密码（生成 config.yaml 用；已存在 config.yaml 时以文件为准）。 */
   serverAuth: z.string().default(""),
+  /**
+   * 服务器密码的环境变量名（如 HYSTERIA_SERVER_AUTH），优先于 serverAuth。
+   * 推荐：密码只放环境变量/凭据存储，不写进 patch 配置。
+   */
+  serverAuthEnv: z.string().default(""),
   /**
    * hysteria 客户端监听地址（安全默认仅本机 127.0.0.1，本机之外不可访问）。
    * docker/k8s 容器需要访问时：配成宿主 docker 网段地址（如 Linux 172.17.0.1），
