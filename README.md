@@ -84,16 +84,19 @@ export ALL_PROXY=socks5://127.0.0.1:1080
 - 代理目录：`config.yaml`（hysteria2 客户端配置）——**缺失时插件按 `server`/`serverAuth` 参数自动生成，无需手写**
 - 带鉴权转发层为**内置 Node 实现**，不需要 python
 
-## 常驻模式（最省心）：代理保持运行，用的时候直接用
+## 常驻模式（推荐）：随 DSH 启动自动拉起，用的时候直接用
 
-代理**保持启动**（登录自启），不探测、不自动启停；需要走代理的命令直接带上代理即可：
+代理**随 DSH 启动自动拉起**（autoStart 默认开，幂等：已在运行则跳过），不探测、不自动启停；需要走代理的命令直接带上代理即可：
 
-- Windows 登录自启：Startup 文件夹放 hysteria-proxy.vbs（隐藏窗口调 start.ps1 start），或计划任务；Linux 用 systemd 服务/rc.local
+- DSH 启动 → 插件自动 proxy_start；DSH 退出**不停**代理（保留给其它程序用），要停就手动 proxy_stop
+- 想关闭随启：config.autoStart: false（之后手动 proxy_start / proxy_stop）
 - 用的时候：
   - 单命令：git -c http.proxy=http://127.0.0.1:7890 push / HTTPS_PROXY=http://127.0.0.1:7890 npm install
-  - 长期：git config --global http.proxy http://127.0.0.1:7890（想常走就设，不想就走上面单命令）
+  - 长期：git config --global http.proxy http://127.0.0.1:7890
   - agent 任务：proxy_retry { command: 'git push origin main' }（直连失败自动带代理重试）
-- 要停就 proxy_stop（或 start.ps1 stop），想恢复 proxy_start
+- 独立于 DSH 的场景（不开 DSH 也要代理）：Windows 用计划任务或 Startup 快捷方式调 start.ps1，Linux 用 systemd / rc.local
+
+## 任务内失败兜底（备选）：遇到访问不了/下载慢时自动用代理
 
 ## 任务内失败兜底（备选）：遇到访问不了/下载慢时自动用代理
 

@@ -65,6 +65,11 @@ export const Config = z.object({
   /** 连通性检测目标 URL（应返回 2xx/204）。 */
   checkUrl: z.string().default("https://www.gstatic.com/generate_204"),
   /**
+   * DSH 启动时自动拉起代理（幂等，已在运行则跳过）。
+   * 推荐常驻模式：DSH 一启动代理就绪，用的时候直接用。
+   */
+  autoStart: z.boolean().default(true),
+  /**
    * 按需代理守护（on-demand）：平时直连，检测到访问失败/变慢时自动启用代理并让 git/npm 走代理，
    * 直连恢复稳定后自动停代理回直连。false=关闭（默认，手动 proxy_start/stop）。
    */
@@ -95,6 +100,19 @@ export const Config = z.object({
 
 export function apply(ctx, config) {
   const proxy = createProxyOps(config);
+
+  // ---------- 随 DSH 启动自动拉起代理（autoStart，幂等；已运行则跳过）----------
+  if (config.autoStart !== false) {
+    setTimeout(() => {
+      proxy
+        .start()
+        .then((r) => {
+          if (r.ok) console.log(`[hysteria] 随 DSH 启动自动拉起代理${r.alreadyRunning ? "（已在运行）" : ""}`);
+          else console.log(`[hysteria] 自动启动代理失败：${r.error || "未知"}`);
+        })
+        .catch((e) => console.log(`[hysteria] 自动启动代理异常：${e.message}`));
+    }, 1500).unref?.();
+  }
 
   // ---------- 按需代理守护（autoProxy）：平时直连，失败/变慢自动启用代理，恢复自动停 ----------
   let autoProxy = null;
