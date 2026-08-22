@@ -11,6 +11,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 const START_TIMEOUT_MS = 15_000;
 const CHECK_TIMEOUT_MS = 12_000;
@@ -39,11 +40,36 @@ function pidsFromPidFile(homeDir, file) {
   }
 }
 
-/** Python 解释器：win32 优先 python3，缺失回退 python。 */
+/** Python 解释器：win32 优先 python3，缺失回退 python（旧版 auth-proxy.py 兼容用）。 */
 function pythonBin() {
   if (!isWin) return "python3";
   const r = spawnSync("where", ["python3"], { encoding: "utf8" });
   return r.status === 0 ? "python3" : "python";
+}
+
+/**
+ * 按配置生成 hysteria2 客户端 config.yaml（用户无需手写；只填 server / serverAuth 即可）。
+ * 安全默认：http/socks5 均只监听 config.listen（默认 127.0.0.1），本机之外不可访问；
+ * docker/k8s 容器如需访问，把 listen 配成宿主 docker 网段地址并配合防火墙放行（见 README 安全章节）。
+ */
+function generateClientConfig(cfg) {
+  const listen = cfg.listen || "127.0.0.1";
+  const httpPort = Number(cfg.httpPort) || 7890;
+  const socksPort = Number(cfg.socksPort) || 1080;
+  return [
+    `server: ${cfg.server}`,
+    `auth: ${cfg.serverAuth || ""}`,
+    `tls:`,
+    `  insecure: true`,
+    `http:`,
+    `  listen: ${listen}:${httpPort}`,
+    `socks5:`,
+    `  listen: ${listen}:${socksPort}`,
+    ``,
+    `bandwidth:`,
+    `  up: 50 mbps`,
+    `  down: 100 mbps`,
+  ].join("\n") + "\n";
 }
 
 /** 展开 ~ 为 home。 */
@@ -200,6 +226,8 @@ export function createProxyOps(config) {
       proxyEgressIp: connected ? proxiedEgressIp() : null,
       creds: { ...creds(), pass: "****" },
       home: homeDir,
+      listen: config.listen || "127.0.0.1",
+      server: config.server || null,
     };
   }
 
@@ -226,8 +254,16 @@ export function createProxyOps(config) {
     const existed = findHysteriaPids(home).length > 0;
     const out = { started: [], alreadyRunning: existed };
 
-    if (!existsSync(join(homeDir, "config.yaml"))) {
-      return { ok: false, error: `未找到 ${join(homeDir, "config.yaml")}，请先配置 hysteria` };
+    const cfgPath = join(homeDir, "config.yaml");
+    if (!existsSync(cfgPath)) {
+      if (!config.server) {
+        return { ok: false, error: `未找到 ${cfgPath} 且未配置 server（如 8.216.46.73:443）。请提供代理服务器参数，或手动放置 config.yaml。` };
+      }
+      // 用户只填了服务器参数 → 自动生成客户端配置（默认仅监听 127.0.0.1）
+      mkdirSync(homeDir, { recursive: true });
+      writeFileSync(cfgPath, generateClientConfig(config));
+      out.started.push("config.yaml(自动生成)");
+      logTo(home, "client.log", [`[plugin] 已按配置生成 config.yaml（server=${config.server}，listen=${config.listen || "127.0.0.1"}）`]);
     }
 
     // 1) hysteria client
@@ -248,25 +284,29 @@ export function createProxyOps(config) {
       logTo(home, "client.log", ["[plugin] hysteria 已启动"]);
     }
 
-    // 2) auth-proxy.py（凭据从 py 源码读取，插件不内置密码）
+    // 2) 内置 Node auth-proxy（Basic Auth 转发代理，替代 python3 auth-proxy.py，零 python 依赖）
     if (!findAuthProxyPids(home).length) {
-      const py = join(homeDir, "auth-proxy.py");
-      if (existsSync(py)) {
-        const c = creds();
-        const child = spawn(
-          pythonBin(),
-          [py, "-l", `127.0.0.1:${authPort}`, "-t", `127.0.0.1:${httpPort}`, "-u", c.name, "-p", c.pass],
-          { cwd: homeDir, detached: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
-        );
-        child.stdout.on("data", (d) => appendFileSync(join(homeDir, "auth-proxy.log"), d));
-        child.stderr.on("data", (d) => appendFileSync(join(homeDir, "auth-proxy.log"), d));
-        child.unref();
-        if (isWin && child.pid) {
-          try { writeFileSync(join(homeDir, "auth-proxy.pid"), String(child.pid)); } catch { /* noop */ }
-        }
-        out.started.push("auth-proxy");
-        logTo(home, "auth-proxy.log", ["[plugin] auth-proxy 已启动"]);
+      const c = creds();
+      const authProxyScript = fileURLToPath(new URL("./authproxy.js", import.meta.url));
+      const child = spawn(
+        process.execPath,
+        [authProxyScript, "--listen", `127.0.0.1:${authPort}`, "--upstream", `127.0.0.1:${httpPort}`],
+        {
+          cwd: homeDir,
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+          env: { ...process.env, AUTH_PROXY_USER: c.name, AUTH_PROXY_PASS: c.pass },
+        },
+      );
+      child.stdout.on("data", (d) => appendFileSync(join(homeDir, "auth-proxy.log"), d));
+      child.stderr.on("data", (d) => appendFileSync(join(homeDir, "auth-proxy.log"), d));
+      child.unref();
+      if (isWin && child.pid) {
+        try { writeFileSync(join(homeDir, "auth-proxy.pid"), String(child.pid)); } catch { /* noop */ }
       }
+      out.started.push("auth-proxy(内置 Node)");
+      logTo(home, "auth-proxy.log", ["[plugin] auth-proxy(内置 Node) 已启动"]);
     }
 
     // 等待端口就绪（最多 START_TIMEOUT_MS）

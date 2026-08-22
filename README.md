@@ -10,7 +10,7 @@
 | 进程 | 端口 | 用途 |
 |---|---|---|
 | `hysteria client -c config.yaml` | HTTP `127.0.0.1:7890` / SOCKS5 `127.0.0.1:1080` | Hysteria 2 隧道 |
-| `python3 auth-proxy.py` | HTTP `127.0.0.1:7891`（Basic Auth，凭据在 `auth-proxy.py` 内配置） | 带鉴权的 HTTP 转发代理 |
+| 内置 Node `authproxy.js`（替代 python） | HTTP `127.0.0.1:7891`（Basic Auth） | 带鉴权的 HTTP 转发代理，**零 python 依赖** |
 
 日志沿用 `~/.hysteria/client.log` / `auth-proxy.log`。所有操作幂等。
 
@@ -21,7 +21,7 @@
 dsh plugin --profile web add /home/lumin/src/mdyj/hysteria-dsh-plugin
 # 或 dsh plugin --profile web add github:luminsw/hysteria-dsh-plugin
 # 配置覆盖（可选，默认即可用）：
-#   ~/.dsh/profiles/web/cordis.patch.yml → id: dsh-hysteria-proxy → config: { home, hysteriaBin, httpPort, socksPort, authPort, checkUrl }
+#   ~/.dsh/profiles/web/cordis.patch.yml → id: dsh-hysteria-proxy → config: { home, hysteriaBin, server, serverAuth, listen, httpPort, socksPort, authPort, authUser, authPass, checkUrl }
 ```
 
 改代码后重启 DSH 生效：`pkill -f "dsh web"; npx @deepseek-ai/dsh web`（或 `bh_dsh_restart`）。
@@ -70,15 +70,24 @@ export ALL_PROXY=socks5://127.0.0.1:1080
 
 ## 实现说明
 
-- `src/proxy.js`：进程管理（`pgrep` 按配置目录定位进程，避免误杀其它 hysteria；`ss` 查端口；`curl -x` 测连通性；detached + unref 后台运行，日志落盘）。
+- `src/proxy.js`：进程管理（Linux `pgrep/ss`，Windows pid 文件 + `tasklist/netstat/taskkill`；`curl -x` 测连通性；detached + unref 后台运行，日志落盘）。config.yaml 缺失时按 `server` 参数自动生成。
+- `src/authproxy.js`：内置 Basic Auth HTTP 转发代理（Node 实现，替代 `auth-proxy.py`，零 python 依赖）。
 - `src/index.js`：schemastery 配置 schema + 5 个 DSH 工具注册。
 - 跨平台：Linux/macOS/WSL 走 POSIX 命令（pgrep/ss/ps/kill）；Windows 走内置适配（pid 文件 + tasklist + netstat + taskkill，hysteria.exe 与 python 自动探测），配置 `home`/`hysteriaBin` 指向本机目录即可。
 
 ## 环境要求
 
 - DeepSeek Harness（`@deepseek-ai/cordis` / `@deepseek-ai/dsh-tools`）
-- 宿主机：`hysteria`（PATH 或配置绝对路径）、`python3`、`pgrep`、`ss`、`curl`
-- `~/.hysteria/config.yaml` 与 `auth-proxy.py` 就位
+- 宿主机：`hysteria`（PATH 或配置绝对路径）、`curl`（连通性检测）
+- 代理目录：`config.yaml`（hysteria2 客户端配置）——**缺失时插件按 `server`/`serverAuth` 参数自动生成，无需手写**
+- 带鉴权转发层为**内置 Node 实现**，不需要 python
+
+## 安全（默认仅本机，本机之外不可访问）
+
+- **监听地址**：插件生成的 config.yaml 默认 `http/socks5` 都只监听 `127.0.0.1`——只有本机能用代理，局域网/公网无法访问。需要改监听地址时用配置项 `listen`。
+- **docker/k8s 容器访问**：容器需要走宿主代理时，把 `listen` 配成宿主 docker 网段地址（Linux 如 `172.17.0.1`，Windows Docker Desktop 用宿主 IP 或 `host.docker.internal` 可达地址），**并配防火墙只放行容器网段**（Windows：`New-NetFirewallRule -LocalPort 7890,1080 -RemoteAddress 172.17.0.0/16 ...`）。**不要把 `0.0.0.0` 直接对外**——7890/1080 无鉴权，监听地址是唯一防线。
+- **7891 带 Basic Auth**：内置 Node auth-proxy 要求凭据（`authUser`/`authPass`，未配置时回退读旧 `auth-proxy.py` 源码）；无凭据请求一律 407 拒绝。凭据为空则 7891 仅限回环放行。
+- **凭据不进日志**：auth 密码通过环境变量传入 auth-proxy 子进程，不落命令行/日志。
 
 ## License
 

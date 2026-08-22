@@ -29,6 +29,19 @@ export const Config = z.object({
   home: z.string().default("~/.hysteria"),
   /** hysteria 可执行文件（PATH 中或绝对路径）。 */
   hysteriaBin: z.string().default("hysteria"),
+  /**
+   * 代理服务器地址（"host:port"，如 "8.216.46.73:443"）。
+   * config.yaml 缺失时据此自动生成 hysteria2 客户端配置——用户只填参数即可架起代理，无需手写配置。
+   */
+  server: z.string().default(""),
+  /** hysteria 服务器 auth 密码（生成 config.yaml 用；已存在 config.yaml 时以文件为准）。 */
+  serverAuth: z.string().default(""),
+  /**
+   * hysteria 客户端监听地址（安全默认仅本机 127.0.0.1，本机之外不可访问）。
+   * docker/k8s 容器需要访问时：配成宿主 docker 网段地址（如 Linux 172.17.0.1），
+   * 并配合防火墙只放行容器网段——不要把 0.0.0.0 直接对外。
+   */
+  listen: z.string().default("127.0.0.1"),
   /** hysteria HTTP 代理端口。 */
   httpPort: z.number().default(7890),
   /** hysteria SOCKS5 端口。 */
@@ -68,6 +81,7 @@ export function apply(ctx, config) {
     lines.push(`连通性: ${st.connected ? "✅ 可访问外网" : "❌ 代理不可达外网"}`);
     if (st.egressIp) lines.push(`本机出口 IP: ${st.egressIp}${st.proxyEgressIp ? `（经代理出口 ${st.proxyEgressIp}）` : ""}`);
     if (st.creds) lines.push(`auth 凭据: ${st.creds.name}（来源 ${st.creds.source}）`);
+    lines.push(`监听: ${st.listen || "127.0.0.1"}（仅本机${st.server ? `；服务器 ${st.server}` : ""}）`);
     lines.push(`配置目录: ${st.home}`);
     return lines.join("\n");
   };
@@ -90,7 +104,7 @@ export function apply(ctx, config) {
     defineTool({
       name: "proxy_start",
       description:
-        "启动本机 hysteria 代理（hysteria client + auth-proxy，后台运行，日志写入 ~/.hysteria/*.log）。幂等：已在运行则跳过。启动后可用 HTTPS_PROXY=http://127.0.0.1:7890 或 socks5://127.0.0.1:1080 走代理。宿主机操作。",
+        "启动本机 hysteria 代理（hysteria client + 内置 Node auth-proxy，后台运行，日志写入代理目录/*.log）。config.yaml 缺失时按配置的 server 参数自动生成（默认仅监听 127.0.0.1，本机外不可访问）。幂等：已在运行则跳过。启动后可用 HTTPS_PROXY=http://127.0.0.1:7890 或 socks5://127.0.0.1:1080 走代理。宿主机操作。",
       parameters: {},
       output: { schema: { type: "string" }, render: (_a, v) => [{ type: "text", text: v }] },
       async execute() {
