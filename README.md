@@ -72,7 +72,7 @@ export ALL_PROXY=socks5://127.0.0.1:1080
 
 - `src/proxy.js`：进程管理（`pgrep` 按配置目录定位进程，避免误杀其它 hysteria；`ss` 查端口；`curl -x` 测连通性；detached + unref 后台运行，日志落盘）。
 - `src/index.js`：schemastery 配置 schema + 5 个 DSH 工具注册。
-- 跨平台：进程管理走 POSIX 命令（pgrep/ss/curl），面向 Linux/macOS/WSL；Windows 需另行适配（可后续加 win32 分支）。
+- 跨平台：Linux/macOS/WSL 走 POSIX 命令（pgrep/ss/ps/kill）；Windows 走内置适配（pid 文件 + tasklist + netstat + taskkill，hysteria.exe 与 python 自动探测），配置 `home`/`hysteriaBin` 指向本机目录即可。
 
 ## 环境要求
 

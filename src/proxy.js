@@ -8,13 +8,43 @@
  * 进程以 detached + unref 后台运行，日志追加到 home 下的 *.log（与 start.sh 一致）。
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 const START_TIMEOUT_MS = 15_000;
 const CHECK_TIMEOUT_MS = 12_000;
 const KILL_GRACE_MS = 3_000;
+
+const isWin = process.platform === "win32";
+
+/** 进程是否存活：win32 用 tasklist，POSIX 用 ps。 */
+function isAlive(pid) {
+  if (!pid) return false;
+  if (isWin) {
+    const r = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8" });
+    return r.status === 0 && r.stdout.includes(String(pid));
+  }
+  const r = spawnSync("ps", ["-p", String(pid), "-o", "pid="], { encoding: "utf8" });
+  return r.status === 0 && !!r.stdout.trim();
+}
+
+/** Windows 专用：读 pid 文件（hysteria.pid / auth-proxy.pid，与 start.ps1 一致）+ 存活校验。 */
+function pidsFromPidFile(homeDir, file) {
+  try {
+    const pid = Number(String(readFileSync(join(homeDir, file), "utf8")).trim());
+    return Number.isInteger(pid) && pid > 0 && isAlive(pid) ? [pid] : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Python 解释器：win32 优先 python3，缺失回退 python。 */
+function pythonBin() {
+  if (!isWin) return "python3";
+  const r = spawnSync("where", ["python3"], { encoding: "utf8" });
+  return r.status === 0 ? "python3" : "python";
+}
 
 /** 展开 ~ 为 home。 */
 function expandHome(p) {
@@ -44,6 +74,7 @@ function readAuthCreds(pyPath) {
 
 /** 按命令行特征找 hysteria client 进程（start.sh 用相对路径 -c config.yaml 启动）。 */
 function findHysteriaPids(home) {
+  if (isWin) return pidsFromPidFile(expandHome(home), "hysteria.pid");
   const r = spawnSync("pgrep", ["-f", "hysteria client -c .*config.yaml"], { encoding: "utf8" });
   if (r.status !== 0) return [];
   return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean).map(Number);
@@ -51,6 +82,7 @@ function findHysteriaPids(home) {
 
 /** 按命令行特征找 auth-proxy 进程（相对路径 python3 auth-proxy.py）。 */
 function findAuthProxyPids(home) {
+  if (isWin) return pidsFromPidFile(expandHome(home), "auth-proxy.pid");
   const r = spawnSync("pgrep", ["-f", "python3 .*auth-proxy.py"], { encoding: "utf8" });
   if (r.status !== 0) return [];
   return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean).map(Number);
@@ -59,6 +91,12 @@ function findAuthProxyPids(home) {
 /** 端口是否在监听（ss -tln）。 */
 function portListening(port) {
   if (!port) return false;
+  if (isWin) {
+    const r = spawnSync("netstat", ["-ano", "-p", "tcp"], { encoding: "utf8" });
+    if (r.status !== 0) return false;
+    const re = new RegExp(`:${port}\\s`);
+    return r.stdout.split("\n").some((l) => re.test(l) && l.includes("LISTENING"));
+  }
   const r = spawnSync("ss", ["-tln"], { encoding: "utf8" });
   if (r.status !== 0) return false;
   return r.stdout.split("\n").some((l) => l.includes(`:${port}`));
@@ -66,6 +104,10 @@ function portListening(port) {
 
 function killPids(pids, label) {
   if (!pids.length) return;
+  if (isWin) {
+    for (const pid of pids) spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { encoding: "utf8" });
+    return;
+  }
   spawnSync("kill", pids.map(String), { encoding: "utf8" });
   // 优雅等待；仍存活则强杀
   const deadline = Date.now() + KILL_GRACE_MS;
@@ -82,9 +124,7 @@ function killPids(pids, label) {
 
 /** 读取进程是否存活（pid 存在）。 */
 function alive(pid) {
-  if (!pid) return false;
-  const r = spawnSync("ps", ["-p", String(pid), "-o", "pid="], { encoding: "utf8" });
-  return r.status === 0 && !!r.stdout.trim();
+  return isAlive(pid);
 }
 
 /** 生成一次性启动日志（与 start.sh 的 nohup 语义一致）。 */
@@ -172,7 +212,7 @@ export function createProxyOps(config) {
     }
     attempts.push(`http://127.0.0.1:${httpPort}`);
     for (const proxyUrl of attempts) {
-      const args = ["-sS", "-o", "/dev/null", "-w", "%{http_code}", "-x", proxyUrl, "--max-time", "10", checkUrl];
+      const args = ["-sS", "-o", isWin ? "NUL" : "/dev/null", "-w", "%{http_code}", "-x", proxyUrl, "--max-time", "10", checkUrl];
       const r = spawnSync("curl", args, { encoding: "utf8", timeout: CHECK_TIMEOUT_MS });
       if (r.status !== 0) continue;
       const code = Number(r.stdout.trim());
@@ -196,11 +236,14 @@ export function createProxyOps(config) {
       const child = spawn(
         hysteriaBin,
         ["client", "-c", join(homeDir, "config.yaml")],
-        { cwd: homeDir, detached: true, stdio: ["ignore", "pipe", "pipe"] },
+        { cwd: homeDir, detached: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
       );
       child.stdout.on("data", (d) => appendFileSync(join(homeDir, "client.log"), d));
       child.stderr.on("data", (d) => appendFileSync(join(homeDir, "client.log"), d));
       child.unref();
+      if (isWin && child.pid) {
+        try { writeFileSync(join(homeDir, "hysteria.pid"), String(child.pid)); } catch { /* noop */ }
+      }
       out.started.push("hysteria");
       logTo(home, "client.log", ["[plugin] hysteria 已启动"]);
     }
@@ -211,13 +254,16 @@ export function createProxyOps(config) {
       if (existsSync(py)) {
         const c = creds();
         const child = spawn(
-          "python3",
+          pythonBin(),
           [py, "-l", `127.0.0.1:${authPort}`, "-t", `127.0.0.1:${httpPort}`, "-u", c.name, "-p", c.pass],
-          { cwd: homeDir, detached: true, stdio: ["ignore", "pipe", "pipe"] },
+          { cwd: homeDir, detached: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
         );
         child.stdout.on("data", (d) => appendFileSync(join(homeDir, "auth-proxy.log"), d));
         child.stderr.on("data", (d) => appendFileSync(join(homeDir, "auth-proxy.log"), d));
         child.unref();
+        if (isWin && child.pid) {
+          try { writeFileSync(join(homeDir, "auth-proxy.pid"), String(child.pid)); } catch { /* noop */ }
+        }
         out.started.push("auth-proxy");
         logTo(home, "auth-proxy.log", ["[plugin] auth-proxy 已启动"]);
       }
