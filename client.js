@@ -133,7 +133,17 @@ window.__ModuleLoader__.load({
         setDraft(d);
       }, [scope]);
 
-      const base = { fontFamily: "inherit", fontSize: 13, lineHeight: 1.6 };
+      const base = {
+        fontFamily: "inherit",
+        fontSize: 13,
+        lineHeight: 1.6,
+        // 与 DSH 内置插件卡片一致：边框 + 背景 + 圆角
+        border: "1px solid var(--dsw-alias-border-l2)",
+        background: "var(--dsw-alias-bg-layer-3)",
+        borderRadius: 14,
+        boxShadow: "0 2px 8px rgba(0,0,0,.14)",
+        padding: "14px 16px",
+      };
       const row = { padding: "2px 0", whiteSpace: "nowrap" };
       const badge = (ok) => (ok ? "✅" : "❌");
       const connected = data?.connected;
@@ -223,12 +233,12 @@ window.__ModuleLoader__.load({
                 "div",
                 { style: { display: "flex", gap: 8, marginTop: 8, alignItems: "center" } },
                 React.createElement("button", {
-                  style: { font: "inherit", fontSize: 12, padding: "4px 12px", borderRadius: 6, border: "1px solid var(--dsw-alias-border-l2)", background: "transparent", color: "var(--dsw-alias-label-secondary)", cursor: saving ? "not-allowed" : "pointer" },
+                  style: { font: "inherit", fontSize: 13, padding: "5px 14px", borderRadius: 8, border: "1px solid var(--dsw-alias-border-l2)", background: "transparent", color: "var(--dsw-alias-label-secondary)", cursor: saving ? "not-allowed" : "pointer" },
                   disabled: saving || !writable,
                   onClick: discard,
                 }, "放弃修改"),
                 React.createElement("button", {
-                  style: { font: "inherit", fontSize: 12, padding: "4px 12px", borderRadius: 6, border: "1px solid var(--dsw-alias-brand-primary)", background: "var(--dsw-alias-brand-primary)", color: "#fff", cursor: saving ? "not-allowed" : "pointer" },
+                  style: { font: "inherit", fontSize: 13, padding: "5px 14px", borderRadius: 8, border: "1px solid transparent", background: "var(--dsw-alias-label-primary)", color: "var(--dsw-alias-bg-layer-3)", cursor: saving ? "not-allowed" : "pointer" },
                   disabled: saving || !writable,
                   onClick: save,
                 }, saving ? "保存中…" : "保存"),
