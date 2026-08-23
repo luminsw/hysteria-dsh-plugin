@@ -38,14 +38,17 @@ export const Config = z.object({
    */
   server: z.string().default(""),
   /** 服务器地址的环境变量名（如 HYSTERIA_SERVER），优先于 server。 */
-  serverEnv: z.string().default(""),
-  /** hysteria 服务器 auth 密码（生成 config.yaml 用；已存在 config.yaml 时以文件为准）。 */
-  serverAuth: z.string().default(""),
+  serverEnv: z.string().role("credential-ref").default(""),
   /**
-   * 服务器密码的环境变量名（如 HYSTERIA_SERVER_AUTH），优先于 serverAuth。
-   * 推荐：密码只放环境变量/凭据存储，不写进 patch 配置。
+   * hysteria 服务器 auth 密码（生成 config.yaml 用；已存在 config.yaml 时以文件为准）。
+   * 机密字段：设置页渲染为 write-only 密码框，值存 DSH 设置（服务端），绝不回传浏览器。
    */
-  serverAuthEnv: z.string().default(""),
+  serverAuth: z.string().role("secret"),
+  /**
+   * 服务器密码的凭据/环境变量引用名（如 HYSTERIA_SERVER_AUTH），优先于 serverAuth。
+   * 推荐：密码只放凭据库/环境变量，不写进 patch 配置；也可在设置页密码框里直接填。
+   */
+  serverAuthEnv: z.string().role("credential-ref").default("HYSTERIA_SERVER_AUTH"),
   /**
    * hysteria 客户端监听地址（安全默认仅本机 127.0.0.1，本机之外不可访问）。
    * docker/k8s 容器需要访问时：配成宿主 docker 网段地址（如 Linux 172.17.0.1），
@@ -60,8 +63,8 @@ export const Config = z.object({
   authPort: z.number().default(7891),
   /** auth-proxy Basic Auth 用户名（默认空=从 ~/.hysteria/auth-proxy.py 源码读取）。 */
   authUser: z.string().default(""),
-  /** auth-proxy Basic Auth 密码（默认空=从 ~/.hysteria/auth-proxy.py 源码读取）。 */
-  authPass: z.string().default(""),
+  /** auth-proxy Basic Auth 密码（默认空=从 ~/.hysteria/auth-proxy.py 源码读取；机密字段）。 */
+  authPass: z.string().role("secret").default(""),
   /** 连通性检测目标 URL（应返回 2xx/204）。 */
   checkUrl: z.string().default("https://www.gstatic.com/generate_204"),
   /**
@@ -99,10 +102,19 @@ export const Config = z.object({
 });
 
 export function apply(ctx, config) {
-  const proxy = createProxyOps(config);
+  // settings 命名空间：用户表单覆盖会重绑 current，运行时（proxy）始终读最新值（修 setSource no-op bug）。
+  let current = () => config;
+  installSettingsSection(ctx, SETTINGS_NS, Config, config, {
+    setSource: (source) => {
+      current = source;
+    },
+    onChange: () => {},
+  });
+  const cfg = () => current();
+  const proxy = createProxyOps(() => current());
 
   // ---------- 随 DSH 启动自动拉起代理（autoStart，幂等；已运行则跳过）----------
-  if (config.autoStart !== false) {
+  if (cfg().autoStart !== false) {
     setTimeout(() => {
       proxy
         .start()
@@ -116,16 +128,10 @@ export function apply(ctx, config) {
 
   // ---------- 按需代理守护（autoProxy）：平时直连，失败/变慢自动启用代理，恢复自动停 ----------
   let autoProxy = null;
-  if (config.autoProxy) {
-    autoProxy = startAutoProxy({ proxy, config, log: (m) => console.log(m) });
+  if (cfg().autoProxy) {
+    autoProxy = startAutoProxy({ proxy, config: cfg(), log: (m) => console.log(m) });
     ctx.onDispose(() => autoProxy?.dispose());
   }
-
-  // ---------- DSH 设置页命名空间（让「Hysteria 代理」卡片在 DSH UI 设置页渲染）----------
-  installSettingsSection(ctx, SETTINGS_NS, Config, config, {
-    setSource: () => {},
-    onChange: () => {},
-  });
 
   const j = (v) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
 
@@ -133,7 +139,7 @@ export function apply(ctx, config) {
     const lines = [];
     lines.push(`hysteria: ${st.hysteria.running ? "✅ 运行中" : "❌ 未运行"}${st.hysteria.pids.length ? `（pid ${st.hysteria.pids.join(",")}）` : ""}`);
     lines.push(`auth-proxy: ${st.authProxy.running ? "✅ 运行中" : "❌ 未运行"}${st.authProxy.pids.length ? `（pid ${st.authProxy.pids.join(",")}）` : ""}`);
-    lines.push(`端口: HTTP ${st.ports.http ? "✅" : "❌"} :${config.httpPort}  SOCKS5 ${st.ports.socks ? "✅" : "❌"} :${config.socksPort}  Auth ${st.ports.auth ? "✅" : "❌"} :${config.authPort}`);
+    lines.push(`端口: HTTP ${st.ports.http ? "✅" : "❌"} :${cfg().httpPort}  SOCKS5 ${st.ports.socks ? "✅" : "❌"} :${cfg().socksPort}  Auth ${st.ports.auth ? "✅" : "❌"} :${cfg().authPort}`);
     lines.push(`连通性: ${st.connected ? "✅ 可访问外网" : "❌ 代理不可达外网"}`);
     if (st.egressIp) lines.push(`本机出口 IP: ${st.egressIp}${st.proxyEgressIp ? `（经代理出口 ${st.proxyEgressIp}）` : ""}`);
     if (st.creds) lines.push(`auth 凭据: ${st.creds.name}（来源 ${st.creds.source}）`);
@@ -260,8 +266,8 @@ export function apply(ctx, config) {
         const cmd = String(args.command || "").trim();
         if (!cmd) return "请提供 command（如 git push origin main / npm install）";
         const timeout = Number(args.timeoutMs) || 120000;
-        const httpUrl = "http://127.0.0.1:" + (Number(config.httpPort) || 7890);
-        const socksUrl = "socks5://127.0.0.1:" + (Number(config.socksPort) || 1080);
+        const httpUrl = "http://127.0.0.1:" + (Number(cfg().httpPort) || 7890);
+        const socksUrl = "socks5://127.0.0.1:" + (Number(cfg().socksPort) || 1080);
         const direct = runShell(cmd, {}, timeout);
         if (direct.code === 0) return "✅ 直连成功\n" + (direct.output || "(无输出)");
         const st = await proxy.status();
@@ -325,7 +331,7 @@ export function apply(ctx, config) {
       autoproxy: st.autoproxy,
       home: st.home,
       credsUser: st.creds?.name ?? null,
-      aliyunConfigured: !!config.aliyun?.securityGroupId,
+      aliyunConfigured: !!cfg().aliyun?.securityGroupId,
     });
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
     res.end(body);

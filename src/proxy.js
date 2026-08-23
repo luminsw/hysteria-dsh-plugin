@@ -174,26 +174,28 @@ function logTo(home, file, lines) {
   }
 }
 
-export function createProxyOps(config) {
-  const home = config.home || "~/.hysteria";
-  const hysteriaBin = config.hysteriaBin ? expandHome(config.hysteriaBin) : "hysteria";
-  const httpPort = Number(config.httpPort) || 7890;
-  const socksPort = Number(config.socksPort) || 1080;
-  const authPort = Number(config.authPort) || 7891;
-  const checkUrl = config.checkUrl || "https://www.gstatic.com/generate_204";
+export function createProxyOps(getConfigOrObj, deps = {}) {
+  // settings 表单可改 server / serverAuth；其余派生值构造时读一次（极少改）。
+  const cfg = () => (typeof getConfigOrObj === "function" ? getConfigOrObj() : getConfigOrObj);
+  const home = cfg().home || "~/.hysteria";
+  const hysteriaBin = cfg().hysteriaBin ? expandHome(cfg().hysteriaBin) : "hysteria";
+  const httpPort = Number(cfg().httpPort) || 7890;
+  const socksPort = Number(cfg().socksPort) || 1080;
+  const authPort = Number(cfg().authPort) || 7891;
+  const checkUrl = cfg().checkUrl || "https://www.gstatic.com/generate_204";
   const homeDir = expandHome(home);
-  // server / serverAuth 优先从环境变量读取（serverEnv / serverAuthEnv 指定变量名），
-  // 密码不落 patch 配置；环境变量缺失时回退直接值（旧写法向后兼容）。
-  const server = config.serverEnv ? process.env[config.serverEnv] || config.server || "" : config.server || "";
-  const serverAuth = config.serverAuthEnv ? process.env[config.serverAuthEnv] || config.serverAuth || "" : config.serverAuth || "";
+  const listenAddr = () => cfg().listen || "127.0.0.1";
+  // server / serverAuth 动态读（settings 表单可改）：每次按需解析，支持 env 引用与配置字面量。
+  const server = () => (cfg().serverEnv ? process.env[cfg().serverEnv] || cfg().server || "" : cfg().server || "");
+  const serverAuth = () => (cfg().serverAuthEnv ? process.env[cfg().serverAuthEnv] || cfg().serverAuth || "" : cfg().serverAuth || "");
 
   /** auth-proxy 凭据：配置显式指定优先，否则从 auth-proxy.py 读取。 */
   function creds() {
     const fromPy = readAuthCreds(join(homeDir, "auth-proxy.py"));
     return {
-      name: config.authUser || fromPy.name,
-      pass: config.authPass || fromPy.pass,
-      source: config.authUser || config.authPass ? "config" : "auth-proxy.py",
+      name: cfg().authUser || fromPy.name,
+      pass: cfg().authPass || fromPy.pass,
+      source: cfg().authUser || cfg().authPass ? "config" : "auth-proxy.py",
     };
   }
 
@@ -242,9 +244,9 @@ export function createProxyOps(config) {
       proxyEgressIp: connected ? proxiedEgressIp() : null,
       creds: { ...creds(), pass: "****" },
       home: homeDir,
-      listen: config.listen || "127.0.0.1",
-      server: server || null,
-      serverAuthSource: config.serverAuthEnv ? "env:" + config.serverAuthEnv : config.serverAuth ? "config" : null,
+      listen: listenAddr(),
+      server: server() || null,
+      serverAuthSource: cfg().serverAuthEnv ? "env:" + cfg().serverAuthEnv : cfg().serverAuth ? "config" : null,
     };
   }
 
@@ -273,14 +275,14 @@ export function createProxyOps(config) {
 
     const cfgPath = join(homeDir, "config.yaml");
     if (!existsSync(cfgPath)) {
-      if (!config.server) {
+      if (!server()) {
         return { ok: false, error: `未找到 ${cfgPath} 且未配置 server（如 8.216.46.73:443）。请提供代理服务器参数，或手动放置 config.yaml。` };
       }
       // 用户只填了服务器参数 → 自动生成客户端配置（默认仅监听 127.0.0.1）
       mkdirSync(homeDir, { recursive: true });
-      writeFileSync(cfgPath, generateClientConfig({ ...config, server, serverAuth }));
+      writeFileSync(cfgPath, generateClientConfig({ ...cfg(), server: server(), serverAuth: serverAuth() }));
       out.started.push("config.yaml(自动生成)");
-      logTo(home, "client.log", [`[plugin] 已按配置生成 config.yaml（server=${server}，listen=${config.listen || "127.0.0.1"}）`]);
+      logTo(home, "client.log", [`[plugin] 已按配置生成 config.yaml（server=${server()}，listen=${listenAddr()}）`]);
     }
 
     // 1) hysteria client
@@ -375,7 +377,7 @@ export function createProxyOps(config) {
    * 安全组信息走配置（config.aliyun），不硬编码在代码里；默认不碰杭州花阁安全组。
    */
   async function aliyun(opts = {}) {
-    const sg = config.aliyun;
+    const sg = cfg().aliyun;
     if (!sg || !sg.securityGroupId) {
       return { ok: false, error: "未配置阿里云安全组（config.aliyun.securityGroupId），请在 DSH 配置中填写" };
     }
