@@ -42,6 +42,7 @@ window.__ModuleLoader__.load({
       const [draft, setDraft] = useState({});
       const [saving, setSaving] = useState(false);
       const [saveMsg, setSaveMsg] = useState(null);
+      const [open, setOpen] = useState(true);
 
       const loadStatus = useCallback(async () => {
         try {
@@ -156,101 +157,122 @@ window.__ModuleLoader__.load({
         borderRadius: 8, padding: "6px 10px", lineHeight: 1.5,
       };
       const hint = { fontSize: 11, color: "var(--dsw-alias-label-tertiary)", lineHeight: 1.5 };
+      // 开合：与 DSH 内置卡片一致——点击标题栏折叠/展开内容
+      const headerBtn = {
+        appearance: "none", width: "100%", font: "inherit", color: "inherit", textAlign: "left",
+        cursor: "pointer", background: "transparent", border: "none", padding: 0, margin: 0,
+        display: "flex", alignItems: "center", gap: 8,
+      };
+      const chevron = {
+        color: "var(--dsw-alias-label-tertiary)", flex: "none", fontSize: 12,
+        transition: "transform .16s", transform: open ? "rotate(180deg)" : "none",
+      };
 
       // 卡片外层（含样式注入；保留只读状态展示）
       return React.createElement(
         "div",
         { style: base },
         React.createElement(
-          "div",
-          { style: { marginBottom: 6 } },
+          "button",
+          { type: "button", style: headerBtn, "aria-expanded": open, onClick: () => setOpen(!open) },
           React.createElement(
-            "div",
-            { style: { fontSize: 15, fontWeight: 600, lineHeight: 1.4, color: "var(--dsw-alias-label-primary)" } },
-            "Hysteria 代理" + (data ? (connected ? " · 连通 ✅" : " · 不通 ❌") : "")
+            "span",
+            { style: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 } },
+            React.createElement(
+              "span",
+              { style: { fontSize: 15, fontWeight: 600, lineHeight: 1.4, color: "var(--dsw-alias-label-primary)" } },
+              "Hysteria 代理" + (data ? (connected ? " · 连通 ✅" : " · 不通 ❌") : "")
+            ),
+            React.createElement(
+              "span",
+              { style: { fontSize: 13, lineHeight: 1.5, color: "var(--dsw-alias-label-tertiary)" } },
+              "本机 hysteria 隧道与 auth 转发代理：状态 + 可配置参数（保存后重启代理生效）。"
+            )
           ),
-          React.createElement(
-            "div",
-            { style: { fontSize: 13, lineHeight: 1.5, color: "var(--dsw-alias-label-tertiary)", marginTop: 2 } },
-            "本机 hysteria 隧道与 auth 转发代理：状态 + 可配置参数（保存后重启代理生效）。"
-          )
+          React.createElement("span", { style: chevron }, "▾")
         ),
-        err
-          ? React.createElement("div", { style: { color: "#c0392b" } }, "状态加载失败：" + err)
-          : !data
-            ? React.createElement("div", { style: { color: "#888" } }, "加载中…")
-            : React.createElement(
-                "div",
-                null,
-                React.createElement("div", { style: row }, "hysteria: " + (data.hysteria?.running ? "运行中" : "未运行") + (data.hysteria?.pids?.length ? "（pid " + data.hysteria.pids.join(",") + "）" : "")),
-                React.createElement("div", { style: row }, "auth-proxy: " + (data.authProxy?.running ? "运行中" : "未运行") + (data.authProxy?.pids?.length ? "（pid " + data.authProxy.pids.join(",") + "）" : "")),
-                React.createElement("div", { style: row }, "端口: HTTP " + badge(data.ports?.http) + " :7890 · SOCKS5 " + badge(data.ports?.socks) + " :1080 · Auth " + badge(data.ports?.auth) + " :7891"),
-                React.createElement("div", { style: row }, "连通性: " + (data.connected ? "✅ 可访问外网" : "❌ 不可达")),
-                data.egressIp
-                  ? React.createElement("div", { style: row }, "出口 IP: " + data.egressIp + (data.proxyEgressIp ? "（经代理 " + data.proxyEgressIp + "）" : ""))
-                  : null,
-                React.createElement("div", { style: row, color: "#888", fontSize: 12 }, "配置目录: " + data.home + (data.aliyunConfigured ? " · 阿里云自动修复已配置" : ""))
-              ),
-        scope && snap
+        open
           ? React.createElement(
               "div",
-              { style: { marginTop: 10, borderTop: "1px solid var(--dsw-alias-border-l2)", paddingTop: 8 } },
-              React.createElement(
-                "div",
-                { style: { fontSize: 13, fontWeight: 600, color: "var(--dsw-alias-label-primary)", marginBottom: 4 } },
-                "参数配置" + (snap.status === "unavailable" ? "（当前不可编辑）" : "")
-              ),
-              FIELDS.map((f) => {
-                const val = draft[f.key];
-                const isNum = f.type === "number";
-                const isBool = f.type === "boolean";
-                return React.createElement(
-                  "div",
-                  { key: f.key, style: fieldWrap },
-                  React.createElement("label", { style: lab }, f.label),
-                  isBool
-                    ? React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13 } },
-                        React.createElement("input", {
-                          type: "checkbox",
-                          checked: val === true || val === "true" || val === "1" || val === "on",
-                          disabled: !writable || saving,
-                          onChange: (e) => setField(f.key, e.target.checked),
-                        }),
-                        React.createElement("span", { style: hint }, "开启"))
-                    : React.createElement("input", {
-                        style: inp,
-                        type: f.type === "password" ? "password" : "text",
-                        inputMode: isNum ? "numeric" : undefined,
-                        value: val === undefined ? "" : String(val),
-                        placeholder: f.type === "password" ? "留空保持现状" : undefined,
-                        disabled: !writable || saving,
-                        onChange: (e) => setField(f.key, e.target.value),
-                      }),
-                  React.createElement("div", { style: hint }, f.hint)
-                );
-              }),
-              React.createElement(
-                "div",
-                { style: { display: "flex", gap: 8, marginTop: 8, alignItems: "center" } },
-                React.createElement("button", {
-                  style: { font: "inherit", fontSize: 13, padding: "5px 14px", borderRadius: 8, border: "1px solid var(--dsw-alias-border-l2)", background: "transparent", color: "var(--dsw-alias-label-secondary)", cursor: saving ? "not-allowed" : "pointer" },
-                  disabled: saving || !writable,
-                  onClick: discard,
-                }, "放弃修改"),
-                React.createElement("button", {
-                  style: { font: "inherit", fontSize: 13, padding: "5px 14px", borderRadius: 8, border: "1px solid transparent", background: "var(--dsw-alias-label-primary)", color: "var(--dsw-alias-bg-layer-3)", cursor: saving ? "not-allowed" : "pointer" },
-                  disabled: saving || !writable,
-                  onClick: save,
-                }, saving ? "保存中…" : "保存"),
-                saveMsg
-                  ? React.createElement("span", { style: { fontSize: 12, color: saveMsg.ok ? "#2e7d32" : "#c0392b" } }, saveMsg.text)
-                  : null,
-                React.createElement(
-                  "span",
-                  { style: { color: "#888", fontSize: 11 } },
-                  "启停/重启请让 agent 调用 proxy_start / proxy_stop / proxy_restart"
-                )
-              )
+              null,
+              err
+                ? React.createElement("div", { style: { color: "#c0392b", marginTop: 6 } }, "状态加载失败：" + err)
+                : !data
+                  ? React.createElement("div", { style: { color: "#888", marginTop: 6 } }, "加载中…")
+                  : React.createElement(
+                      "div",
+                      null,
+                      React.createElement("div", { style: row }, "hysteria: " + (data.hysteria?.running ? "运行中" : "未运行") + (data.hysteria?.pids?.length ? "（pid " + data.hysteria.pids.join(",") + "）" : "")),
+                      React.createElement("div", { style: row }, "auth-proxy: " + (data.authProxy?.running ? "运行中" : "未运行") + (data.authProxy?.pids?.length ? "（pid " + data.authProxy.pids.join(",") + "）" : "")),
+                      React.createElement("div", { style: row }, "端口: HTTP " + badge(data.ports?.http) + " :7890 · SOCKS5 " + badge(data.ports?.socks) + " :1080 · Auth " + badge(data.ports?.auth) + " :7891"),
+                      React.createElement("div", { style: row }, "连通性: " + (data.connected ? "✅ 可访问外网" : "❌ 不可达")),
+                      data.egressIp
+                        ? React.createElement("div", { style: row }, "出口 IP: " + data.egressIp + (data.proxyEgressIp ? "（经代理 " + data.proxyEgressIp + "）" : ""))
+                        : null,
+                      React.createElement("div", { style: row, color: "#888", fontSize: 12 }, "配置目录: " + data.home + (data.aliyunConfigured ? " · 阿里云自动修复已配置" : ""))
+                    ),
+              scope && snap
+                ? React.createElement(
+                    "div",
+                    { style: { marginTop: 10, borderTop: "1px solid var(--dsw-alias-border-l2)", paddingTop: 8 } },
+                    React.createElement(
+                      "div",
+                      { style: { fontSize: 13, fontWeight: 600, color: "var(--dsw-alias-label-primary)", marginBottom: 4 } },
+                      "参数配置" + (snap.status === "unavailable" ? "（当前不可编辑）" : "")
+                    ),
+                    FIELDS.map((f) => {
+                      const val = draft[f.key];
+                      const isNum = f.type === "number";
+                      const isBool = f.type === "boolean";
+                      return React.createElement(
+                        "div",
+                        { key: f.key, style: fieldWrap },
+                        React.createElement("label", { style: lab }, f.label),
+                        isBool
+                          ? React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 13 } },
+                              React.createElement("input", {
+                                type: "checkbox",
+                                checked: val === true || val === "true" || val === "1" || val === "on",
+                                disabled: !writable || saving,
+                                onChange: (e) => setField(f.key, e.target.checked),
+                              }),
+                              React.createElement("span", { style: hint }, "开启"))
+                          : React.createElement("input", {
+                              style: inp,
+                              type: f.type === "password" ? "password" : "text",
+                              inputMode: isNum ? "numeric" : undefined,
+                              value: val === undefined ? "" : String(val),
+                              placeholder: f.type === "password" ? "留空保持现状" : undefined,
+                              disabled: !writable || saving,
+                              onChange: (e) => setField(f.key, e.target.value),
+                            }),
+                        React.createElement("div", { style: hint }, f.hint)
+                      );
+                    }),
+                    React.createElement(
+                      "div",
+                      { style: { display: "flex", gap: 8, marginTop: 8, alignItems: "center" } },
+                      React.createElement("button", {
+                        style: { font: "inherit", fontSize: 13, padding: "5px 14px", borderRadius: 8, border: "1px solid var(--dsw-alias-border-l2)", background: "transparent", color: "var(--dsw-alias-label-secondary)", cursor: saving ? "not-allowed" : "pointer" },
+                        disabled: saving || !writable,
+                        onClick: discard,
+                      }, "放弃修改"),
+                      React.createElement("button", {
+                        style: { font: "inherit", fontSize: 13, padding: "5px 14px", borderRadius: 8, border: "1px solid transparent", background: "var(--dsw-alias-label-primary)", color: "var(--dsw-alias-bg-layer-3)", cursor: saving ? "not-allowed" : "pointer" },
+                        disabled: saving || !writable,
+                        onClick: save,
+                      }, saving ? "保存中…" : "保存"),
+                      saveMsg
+                        ? React.createElement("span", { style: { fontSize: 12, color: saveMsg.ok ? "#2e7d32" : "#c0392b" } }, saveMsg.text)
+                        : null,
+                      React.createElement(
+                        "span",
+                        { style: { color: "#888", fontSize: 11 } },
+                        "启停/重启请让 agent 调用 proxy_start / proxy_stop / proxy_restart"
+                      )
+                    )
+                  )
+                : null
             )
           : null
       );
