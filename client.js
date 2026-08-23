@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
       const [draft, setDraft] = useState({});
       const [saving, setSaving] = useState(false);
       const [saveMsg, setSaveMsg] = useState(null);
-      const [open, setOpen] = useState(true);
+      const [open, setOpen] = useState(false);
 
       const loadStatus = useCallback(async () => {
         try {
@@ -189,7 +189,9 @@ window.__ModuleLoader__.load({
               "本机 hysteria 隧道与 auth 转发代理：状态 + 可配置参数（保存后重启代理生效）。"
             )
           ),
-          React.createElement("span", { style: chevron }, "▾")
+          React.createElement("svg", { width: 14, height: 14, viewBox: "0 0 14 14", fill: "none", style: chevron },
+            React.createElement("path", { d: "M3 5.5L7 9.5L11 5.5", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round" })
+          )
         ),
         open
           ? React.createElement(
