@@ -7,3 +7,4 @@ auth-proxy.log
 *.log
 .env
 node_modules/
+.codegraph/
