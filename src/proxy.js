@@ -174,6 +174,19 @@ function logTo(home, file, lines) {
   }
 }
 
+/** 依据退出码/信号给一个指向性提示（帮助定位代理崩溃根因）。 */
+function classifyExit(code, signal) {
+  if (signal === "SIGKILL" || Number(code) === 137) return "疑似被 OOM/内核 SIGKILL 杀掉（查 dmesg、内存占用）";
+  if (signal === "SIGSEGV") return "疑似崩溃：SIGSEGV 内存越界";
+  if (signal === "SIGBUS") return "疑似崩溃：SIGBUS 总线错误";
+  if (signal === "SIGABRT") return "疑似崩溃：SIGABRT 中断（Go runtime panic？）";
+  if (signal === "SIGTERM") return "被 SIGTERM 正常终止";
+  if (signal === "SIGHUP") return "被 SIGHUP 终止（会话/终端挂断？）";
+  if (Number(code) === 0) return "正常退出";
+  if (signal) return `被信号 ${signal} 终止（非零退出）`;
+  return `异常退出（exit code=${code}）`;
+}
+
 export function createProxyOps(getConfigOrObj, deps = {}) {
   // settings 表单可改 server / serverAuth；其余派生值构造时读一次（极少改）。
   const cfg = () => (typeof getConfigOrObj === "function" ? getConfigOrObj() : getConfigOrObj);
@@ -184,6 +197,34 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
   const authPort = Number(cfg().authPort) || 7891;
   const checkUrl = cfg().checkUrl || "https://www.gstatic.com/generate_204";
   const homeDir = expandHome(home);
+  // 诊断：进程生命周期（SPAWN/EXIT + 退出码/信号/存活时长/末尾输出）写入 home/diag.log，供 proxy_diag 只读查看。
+  const diagLog = join(homeDir, "diag.log");
+  const spawned = new Map(); // pid -> { type, child, startedAt, tail }
+  const diagAppend = (s) => { try { appendFileSync(diagLog, s); } catch { /* noop */ } };
+  /** 包装子进程：转发 stdout/stderr 到对应 log，并捕获退出码/信号写诊断日志。 */
+  function watchChild(type, child, logFile) {
+    const t = Date.now();
+    const pid = child.pid;
+    let tail = "";
+    diagAppend(`\n${new Date().toISOString()} [${type}] SPAWN pid=${pid ?? "-"} cmd=${(Array.isArray(child.spawnargs) ? child.spawnargs.join(" ") : "")}\n`);
+    child.stdout.on("data", (d) => { const s = d.toString(); tail = (tail + s).slice(-2048); try { appendFileSync(logFile, s); } catch { /* noop */ } });
+    child.stderr.on("data", (d) => { const s = d.toString(); tail = (tail + s).slice(-2048); try { appendFileSync(logFile, s); } catch { /* noop */ } });
+    child.on("error", (e) => {
+      tail = (tail + `\n[spawn-error] ${e.message}`).slice(-2048);
+      diagAppend(`\n${new Date().toISOString()} [${type}] SPAWN-ERROR pid=${pid ?? "-"} ${e.message}\n`);
+      try { appendFileSync(logFile, `\n${new Date().toISOString()} [plugin] ${type} 启动失败：${e.message}\n`); } catch { /* noop */ }
+    });
+    child.on("exit", (code, signal) => {
+      const secs = Math.round((Date.now() - t) / 1000);
+      const why = classifyExit(code, signal);
+      const ttail = tail.trim() ? ` | 末尾输出: ${tail.trim().replace(/\s+/g, " ").slice(-180)}` : "";
+      diagAppend(`\n${new Date().toISOString()} [${type}] EXIT pid=${pid} code=${code} signal=${signal} uptime=${secs}s ${why}${ttail}\n`);
+      spawned.delete(pid);
+    });
+    spawned.set(pid, { type, child, startedAt: t });
+    child.unref();
+    return child;
+  }
   const listenAddr = () => cfg().listen || "127.0.0.1";
   // server / serverAuth 动态读（settings 表单可改）：每次按需解析，支持 env 引用与配置字面量。
   const server = () => (cfg().serverEnv ? process.env[cfg().serverEnv] || cfg().server || "" : cfg().server || "");
@@ -293,14 +334,8 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
         ["client", "-c", join(homeDir, "config.yaml")],
         { cwd: homeDir, detached: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
       );
-      child.on("error", (e) => {
-        // 可执行文件缺失/无权限等：记录日志，不崩溃（无 error 监听时 Node 会抛出未捕获异常终止进程）
-        out.spawnError = `${hysteriaBin} 启动失败：${e.message}`;
-        try { appendFileSync(join(homeDir, "client.log"), `\n${new Date().toISOString()} [plugin] ${out.spawnError}\n`); } catch { /* noop */ }
-      });
-      child.stdout.on("data", (d) => appendFileSync(join(homeDir, "client.log"), d));
-      child.stderr.on("data", (d) => appendFileSync(join(homeDir, "client.log"), d));
-      child.unref();
+      // 捕获退出码/信号写诊断日志（定位崩溃根因）；stdout/stderr 转发到 client.log。
+      watchChild("hysteria", child, join(homeDir, "client.log"));
       if (isWin && child.pid) {
         try { writeFileSync(join(homeDir, "hysteria.pid"), String(child.pid)); } catch { /* noop */ }
       }
@@ -323,13 +358,7 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
           env: { ...process.env, AUTH_PROXY_USER: c.name, AUTH_PROXY_PASS: c.pass },
         },
       );
-      child.on("error", (e) => {
-        out.spawnError = out.spawnError ? `${out.spawnError}; auth-proxy 启动失败：${e.message}` : `auth-proxy 启动失败：${e.message}`;
-        try { appendFileSync(join(homeDir, "auth-proxy.log"), `\n${new Date().toISOString()} [plugin] auth-proxy 启动失败：${e.message}\n`); } catch { /* noop */ }
-      });
-      child.stdout.on("data", (d) => appendFileSync(join(homeDir, "auth-proxy.log"), d));
-      child.stderr.on("data", (d) => appendFileSync(join(homeDir, "auth-proxy.log"), d));
-      child.unref();
+      watchChild("auth-proxy", child, join(homeDir, "auth-proxy.log"));
       if (isWin && child.pid) {
         try { writeFileSync(join(homeDir, "auth-proxy.pid"), String(child.pid)); } catch { /* noop */ }
       }
@@ -470,5 +499,15 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
     };
   }
 
-  return { status, check, start, stop, restart, aliyun, alive };
+  /** 读取最近诊断记录（进程 SPAWN/EXIT + 退出码/信号/存活时长/末尾输出），用于定位代理崩溃根因。 */
+  function diag() {
+    try {
+      const lines = readFileSync(diagLog, "utf8").split("\n").filter(Boolean);
+      return lines.slice(-80).join("\n");
+    } catch {
+      return "";
+    }
+  }
+
+  return { status, check, start, stop, restart, aliyun, alive, diag };
 }

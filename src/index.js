@@ -276,6 +276,20 @@ export function apply(ctx, config) {
     }),
   );
 
+  ctx.tools.register(
+    defineTool({
+      name: "proxy_diag",
+      description:
+        "查看 hysteria/auth-proxy 进程生命周期诊断日志（SPAWN/EXIT 及退出码/信号/存活时长/末尾输出 + 分类提示），用于定位代理崩溃/被杀的根因。只读。",
+      parameters: {},
+      output: { schema: { type: "string" }, render: (_a, v) => [{ type: "text", text: v }] },
+      async execute() {
+        const d = await proxy.diag();
+        return d ? d : "暂无诊断记录（~/.hysteria/diag.log 为空或不存在）";
+      },
+    }),
+  );
+
   // 跨平台 shell 执行（Windows cmd /c，POSIX /bin/sh -c），可附加代理环境变量
   const runShell = (cmd, extraEnv = {}, timeoutMs) => {
     const env = { ...process.env, ...extraEnv };
