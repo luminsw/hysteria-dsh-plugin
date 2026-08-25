@@ -462,5 +462,13 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
     return result;
   }
 
-  return { status, check, start, stop, restart, aliyun };
+  /** 轻量存活检测：仅查 hysteria/auth-proxy 进程 pids，不做网络/连通性探测（供代理守护 keep-alive 用）。 */
+  function alive() {
+    return {
+      hysteria: findHysteriaPids(home).length > 0,
+      authProxy: findAuthProxyPids(home).length > 0,
+    };
+  }
+
+  return { status, check, start, stop, restart, aliyun, alive };
 }

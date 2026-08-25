@@ -73,6 +73,14 @@ export const Config = z.object({
    */
   autoStart: z.boolean().default(true),
   /**
+   * 代理守护（keep-alive）：只要 DSH 运行且本插件加载，就周期性检测代理是否在线，
+   * 若 hysteria/auth-proxy 任一线程不在，自动调用 proxy.start() 拉起，保证"DSH 在跑代理就在"。
+   * 生命周期与 DSH 一致：DSH 停止 → 守护随之停。false=关闭（仅启动一次，不持续守护）。
+   */
+  keepAlive: z.boolean().default(true),
+  /** 代理守护检测间隔（ms）。 */
+  keepAliveIntervalMs: z.number().default(30000),
+  /**
    * 按需代理守护（on-demand）：平时直连，检测到访问失败/变慢时自动启用代理并让 git/npm 走代理，
    * 直连恢复稳定后自动停代理回直连。false=关闭（默认，手动 proxy_start/stop）。
    */
@@ -124,6 +132,39 @@ export function apply(ctx, config) {
         })
         .catch((e) => console.log(`[hysteria] 自动启动代理异常：${e.message}`));
     }, 1500).unref?.();
+  }
+
+  // ---------- 代理守护（keep-alive）：生命周期与 DSH 一致，代理挂了自动拉起 ----------
+  let keepAliveTimer = null;
+  const keepAliveMs = Number(cfg().keepAliveIntervalMs) || 30_000;
+  let keepWasDown = false;
+  const keepTick = async () => {
+    try {
+      const a = proxy.alive();
+      const up = a.hysteria && a.authProxy;
+      if (up) {
+        if (keepWasDown) {
+          console.log("[hysteria] 代理守护：代理已恢复在线");
+          keepWasDown = false;
+        }
+        return;
+      }
+      const r = await proxy.start();
+      if (r.ok) {
+        console.log("[hysteria] 代理守护：检测到代理离线，已自动拉起");
+        keepWasDown = false;
+      } else if (!keepWasDown) {
+        console.log(`[hysteria] 代理守护：检测到代理离线，自动拉起失败：${r.error || "未知"}（将自动重试）`);
+        keepWasDown = true;
+      }
+    } catch (e) {
+      console.log(`[hysteria] 代理守护异常：${e.message}`);
+    }
+  };
+  if (cfg().keepAlive !== false) {
+    keepAliveTimer = setInterval(() => void keepTick(), keepAliveMs);
+    keepAliveTimer.unref?.();
+    ctx.onDispose(() => clearInterval(keepAliveTimer));
   }
 
   // ---------- 按需代理守护（autoProxy）：平时直连，失败/变慢自动启用代理，恢复自动停 ----------
