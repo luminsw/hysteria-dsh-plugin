@@ -307,7 +307,8 @@ window.__ModuleLoader__.load({
         if (settingsScope) {
           try {
             scope = settingsScope.bind({ namespace: NS });
-            ctx.onDispose(() => {
+            // cordis 4：onDispose 已移除，改用 effect
+            ctx.effect(() => () => {
               try { scope?.dispose?.(); } catch { /* noop */ }
             });
           } catch (e) {

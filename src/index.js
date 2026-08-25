@@ -164,14 +164,15 @@ export function apply(ctx, config) {
   if (cfg().keepAlive !== false) {
     keepAliveTimer = setInterval(() => void keepTick(), keepAliveMs);
     keepAliveTimer.unref?.();
-    ctx.onDispose(() => clearInterval(keepAliveTimer));
+    // cordis 4：onDispose 已移除，改用 effect（execute 立即执行，返回的 disposer 在 fiber 销毁时运行）
+    ctx.effect(() => () => clearInterval(keepAliveTimer));
   }
 
   // ---------- 按需代理守护（autoProxy）：平时直连，失败/变慢自动启用代理，恢复自动停 ----------
   let autoProxy = null;
   if (cfg().autoProxy) {
     autoProxy = startAutoProxy({ proxy, config: cfg(), log: (m) => console.log(m) });
-    ctx.onDispose(() => autoProxy?.dispose());
+    ctx.effect(() => () => autoProxy?.dispose());
   }
 
   const j = (v) => (typeof v === "string" ? v : JSON.stringify(v, null, 2));
@@ -392,5 +393,6 @@ export function apply(ctx, config) {
     res.end(body);
   };
   const disposeStatusUi = webServer?.register({ kind: "exact", path: "/dsh-bridge/proxy/status-ui", handler: statusUiHandler });
-  ctx.on("dispose", () => disposeStatusUi?.());
+  // cordis 4 不派发 "dispose" 事件，同样改用 effect 注册销毁回调
+  ctx.effect(() => () => disposeStatusUi?.());
 }
