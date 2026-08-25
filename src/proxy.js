@@ -201,8 +201,9 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
   const diagLog = join(homeDir, "diag.log");
   const spawned = new Map(); // pid -> { type, child, startedAt, tail }
   const diagAppend = (s) => { try { appendFileSync(diagLog, s); } catch { /* noop */ } };
-  /** 包装子进程：转发 stdout/stderr 到对应 log，并捕获退出码/信号写诊断日志。 */
-  function watchChild(type, child, logFile) {
+  /** 包装子进程：转发 stdout/stderr 到对应 log，并捕获退出码/信号写诊断日志。
+   * onFail(detail)：spawn 失败或非零退出时回调（供 start() 收集真实失败原因，避免外部只能看到“未知”）。 */
+  function watchChild(type, child, logFile, onFail) {
     const t = Date.now();
     const pid = child.pid;
     let tail = "";
@@ -213,6 +214,7 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
       tail = (tail + `\n[spawn-error] ${e.message}`).slice(-2048);
       diagAppend(`\n${new Date().toISOString()} [${type}] SPAWN-ERROR pid=${pid ?? "-"} ${e.message}\n`);
       try { appendFileSync(logFile, `\n${new Date().toISOString()} [plugin] ${type} 启动失败：${e.message}\n`); } catch { /* noop */ }
+      onFail?.(`spawn 失败：${e.message}`);
     });
     child.on("exit", (code, signal) => {
       const secs = Math.round((Date.now() - t) / 1000);
@@ -220,6 +222,7 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
       const ttail = tail.trim() ? ` | 末尾输出: ${tail.trim().replace(/\s+/g, " ").slice(-180)}` : "";
       diagAppend(`\n${new Date().toISOString()} [${type}] EXIT pid=${pid} code=${code} signal=${signal} uptime=${secs}s ${why}${ttail}\n`);
       spawned.delete(pid);
+      if (code !== 0 || signal) onFail?.(`进程退出 code=${code} signal=${signal ?? "-"}（${why}）`);
     });
     spawned.set(pid, { type, child, startedAt: t });
     child.unref();
@@ -313,6 +316,8 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
   async function start() {
     const existed = findHysteriaPids(home).length > 0;
     const out = { started: [], alreadyRunning: existed };
+    const errors = []; // 本次启动收集的子进程失败原因（spawn 错误/非零退出）
+
 
     const cfgPath = join(homeDir, "config.yaml");
     if (!existsSync(cfgPath)) {
@@ -335,7 +340,7 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
         { cwd: homeDir, detached: true, stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
       );
       // 捕获退出码/信号写诊断日志（定位崩溃根因）；stdout/stderr 转发到 client.log。
-      watchChild("hysteria", child, join(homeDir, "client.log"));
+      watchChild("hysteria", child, join(homeDir, "client.log"), (d) => errors.push(`hysteria: ${d}`));
       if (isWin && child.pid) {
         try { writeFileSync(join(homeDir, "hysteria.pid"), String(child.pid)); } catch { /* noop */ }
       }
@@ -358,7 +363,7 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
           env: { ...process.env, AUTH_PROXY_USER: c.name, AUTH_PROXY_PASS: c.pass },
         },
       );
-      watchChild("auth-proxy", child, join(homeDir, "auth-proxy.log"));
+      watchChild("auth-proxy", child, join(homeDir, "auth-proxy.log"), (d) => errors.push(`auth-proxy: ${d}`));
       if (isWin && child.pid) {
         try { writeFileSync(join(homeDir, "auth-proxy.pid"), String(child.pid)); } catch { /* noop */ }
       }
@@ -376,6 +381,18 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
     const st = await status();
     out.ok = st.hysteria.running;
     out.status = st;
+    if (!out.ok) {
+      // 失败必须带真实原因（此前只返回 ok:false → 外部日志永远显示“未知”）
+      const hErr = errors.find((e) => e.startsWith("hysteria:"));
+      out.error = hErr
+        ? `hysteria 客户端未能启动：${hErr.slice("hysteria: ".length)}（hysteriaBin=${hysteriaBin}；详见 ${diagLog}）`
+        : `hysteria 客户端未在运行（端口 ${httpPort}/${socksPort} 未监听；config=${join(homeDir, "config.yaml")}）`;
+    } else if (!st.authProxy.running) {
+      const aErr = errors.find((e) => e.startsWith("auth-proxy:"));
+      out.error = aErr
+        ? `auth-proxy 未在运行：${aErr.slice("auth-proxy: ".length)}`
+        : `auth-proxy 未在运行（pid 文件缺失或进程已退出；详见 ${diagLog}）`;
+    }
     return out;
   }
 
