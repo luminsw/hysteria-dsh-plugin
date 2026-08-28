@@ -44,6 +44,9 @@ dsh plugin --profile web add /home/lumin/src/mdyj/hysteria-dsh-plugin
 | `proxy_start` | 启动 hysteria + auth-proxy（幂等） | ❌ |
 | `proxy_stop` | 停止（幂等） | ❌ |
 | `proxy_restart` | stop → start（换出口 IP / 异常恢复） | ❌ |
+| `proxy_diag` | 进程生命周期诊断（退出码/信号/末尾输出） | ✅ |
+| `proxy_retry` | 直连失败自动带代理重试命令 | ❌ |
+| `proxy_fix_aliyun` | 阿里云安全组出口 IP 对比与修复（apply=true 放行新 IP 并重启代理） | 默认只读 |
 
 ## 怎么用（agent / 开发场景）
 
@@ -72,6 +75,8 @@ export ALL_PROXY=socks5://127.0.0.1:1080
 1. `proxy_check` 确认不可达；
 2. `proxy_restart` 换新连接；
 3. 仍不通 → 大概率是出口 IP 变化被阿里云安全组拦截（见 AGENTS.md 的完整处理流程）。
+   修复：DSH 设置 → 插件 → Hysteria 代理卡片点「检测出口 IP」→ 需修复时点「确认执行修复」，
+   或让 agent 调用 `proxy_fix_aliyun`（默认只读对比，`apply=true` 放行新 IP 并重启代理）。
 
 ### 场景三：不用代理了
 
@@ -90,6 +95,30 @@ export ALL_PROXY=socks5://127.0.0.1:1080
 - 宿主机：`hysteria`（PATH 或配置绝对路径）、`curl`（连通性检测）
 - 代理目录：`config.yaml`（hysteria2 客户端配置）——**缺失时插件按 `server`/`serverAuth` 参数自动生成，无需手写**
 - 带鉴权转发层为**内置 Node 实现**，不需要 python
+
+## 出口 IP 变化自动修复（阿里云安全组，可选）
+
+hysteria 服务器（如阿里云 ECS）安全组只放行固定出口 IP 时，本机宽带重拨换 IP 会被拦截。
+插件提供「修复」能力（设置页卡片按钮，或 agent 工具 `proxy_fix_aliyun`）：
+对比本机当前出口 IP 与安全组已放行 IP → 有差异时新增放行规则（**只增不删**，宽容期并存，
+绝不删旧规则防锁死 SSH）→ 成功后自动重启代理。
+
+需在 DSH 配置补上 `config.aliyun`（默认不启用；设置页卡片会显示“未配置”提示）：
+
+```yaml
+config:
+  aliyun:
+    regionId: ap-northeast-1     # 可选，默认 ap-northeast-1
+    securityGroupId: sg-xxx      # 必填，安全组 ID
+    cli: aliyun                  # 可选，aliyun CLI 命令名（需已配置凭证）
+    ports:                       # 可选，默认 udp 443/443 + tcp 22/22 + icmp -1/-1
+      - { protocol: udp, port: 443/443 }
+      - { protocol: tcp, port: 22/22 }
+      - { protocol: icmp, port: -1/-1 }
+```
+
+设置页卡片「阿里云安全组修复」区：点「检测出口 IP」只读对比（显示当前 IP、已放行 IP、将执行的
+aliyun 命令）→ 需修复时点「确认执行修复」放行新 IP 并重启代理。
 
 ## 常驻模式（推荐）：随 DSH 启动自动拉起，用的时候直接用
 

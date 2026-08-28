@@ -43,6 +43,11 @@ window.__ModuleLoader__.load({
       const [saving, setSaving] = useState(false);
       const [saveMsg, setSaveMsg] = useState(null);
       const [open, setOpen] = useState(false);
+      // 阿里云安全组修复：检测结果 / 错误 / 忙碌状态 / 动作提示
+      const [fix, setFix] = useState(null);
+      const [fixBusy, setFixBusy] = useState(false);
+      const [fixAction, setFixAction] = useState(null); // "check" | "apply"
+      const [fixMsg, setFixMsg] = useState(null);
 
       const loadStatus = useCallback(async () => {
         try {
@@ -134,6 +139,34 @@ window.__ModuleLoader__.load({
         setDraft(d);
       }, [scope]);
 
+      // 阿里云安全组修复：POST /dsh-bridge/proxy/fix-aliyun（apply=false 只读对比；true 放行新 IP 并重启代理）
+      const runFix = useCallback(async (apply) => {
+        if (fixBusy) return;
+        setFixBusy(true);
+        setFixAction(apply ? "apply" : "check");
+        setFixMsg(null);
+        try {
+          const res = await fetch("/dsh-bridge/proxy/fix-aliyun", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ apply }),
+            cache: "no-store",
+          });
+          const j = await res.json().catch(() => null);
+          if (!res.ok || !j || !j.ok) throw new Error((j && j.error) || "HTTP " + res.status);
+          setFix({ data: j });
+          if (apply) {
+            setFixMsg({ ok: !!j.fixed, text: j.fixed ? "✅ 修复完成：新出口 IP 已放行，代理已重启" : "❌ 修复未完全成功（见上方命令结果）" });
+            loadStatus();
+          }
+        } catch (e) {
+          setFix({ error: e instanceof Error ? e.message : String(e) });
+        } finally {
+          setFixBusy(false);
+          setFixAction(null);
+        }
+      }, [fixBusy, loadStatus]);
+
       const base = {
         fontFamily: "inherit",
         fontSize: 13,
@@ -157,6 +190,16 @@ window.__ModuleLoader__.load({
         borderRadius: 8, padding: "6px 10px", lineHeight: 1.5,
       };
       const hint = { fontSize: 11, color: "var(--dsw-alias-label-tertiary)", lineHeight: 1.5 };
+      const btnOutline = {
+        font: "inherit", fontSize: 13, padding: "5px 14px", borderRadius: 8,
+        border: "1px solid var(--dsw-alias-border-l2)", background: "transparent",
+        color: "var(--dsw-alias-label-secondary)", cursor: fixBusy ? "not-allowed" : "pointer",
+      };
+      const btnPrimary = {
+        font: "inherit", fontSize: 13, padding: "5px 14px", borderRadius: 8,
+        border: "1px solid transparent", background: "var(--dsw-alias-label-primary)",
+        color: "var(--dsw-alias-bg-layer-3)", cursor: fixBusy ? "not-allowed" : "pointer",
+      };
       // 开合：与 DSH 内置卡片一致——点击标题栏折叠/展开内容
       const headerBtn = {
         appearance: "none", width: "100%", font: "inherit", color: "inherit", textAlign: "left",
@@ -213,6 +256,79 @@ window.__ModuleLoader__.load({
                         : null,
                       React.createElement("div", { style: row, color: "#888", fontSize: 12 }, "配置目录: " + data.home + (data.aliyunConfigured ? " · 阿里云自动修复已配置" : ""))
                     ),
+                    data
+                      ? React.createElement(
+                      "div",
+                      { style: { marginTop: 10, borderTop: "1px solid var(--dsw-alias-border-l2)", paddingTop: 8 } },
+                      React.createElement(
+                        "div",
+                        { style: { fontSize: 13, fontWeight: 600, color: "var(--dsw-alias-label-primary)", marginBottom: 4, display: "flex", alignItems: "center", gap: 8 } },
+                        "阿里云安全组修复",
+                        data.aliyunConfigured
+                          ? React.createElement("span", { style: { fontSize: 11, color: "var(--dsw-alias-label-tertiary)", fontWeight: 400 } }, "出口 IP 变化时放行新 IP（只增不删）并重启代理")
+                          : null
+                      ),
+                      !data.aliyunConfigured
+                        ? React.createElement("div", { style: hint }, "未配置阿里云安全组（config.aliyun.securityGroupId）。出口 IP 变化被服务器安全组拦截时，可让 agent 调用 proxy_fix_aliyun，或补上 config.aliyun 配置后使用本按钮。")
+                        : React.createElement(
+                            "div",
+                            { style: { display: "flex", flexDirection: "column", gap: 6 } },
+                            React.createElement(
+                              "div",
+                              { style: { display: "flex", gap: 8, alignItems: "center" } },
+                              React.createElement("button", {
+                                type: "button",
+                                style: btnOutline,
+                                disabled: fixBusy,
+                                onClick: () => runFix(false),
+                              }, fixBusy && fixAction === "check" ? "检测中…" : "检测出口 IP"),
+                              fix && fix.data && fix.data.needsFix && !fix.data.fixed
+                                ? React.createElement("button", {
+                                    type: "button",
+                                    style: btnPrimary,
+                                    disabled: fixBusy,
+                                    onClick: () => runFix(true),
+                                  }, fixBusy && fixAction === "apply" ? "修复中…（含重启代理）" : "确认执行修复")
+                                : null
+                            ),
+                            fixMsg
+                              ? React.createElement("div", { style: { fontSize: 12, color: fixMsg.ok ? "#2e7d32" : "#c0392b" } }, fixMsg.text)
+                              : null,
+                            fix && fix.error
+                              ? React.createElement("div", { style: { fontSize: 12, color: "#c0392b", lineHeight: 1.6 } }, "检测失败：" + fix.error + (fix.error.indexOf("405") !== -1 || fix.error.indexOf("404") !== -1 ? "（服务端插件为旧版本，重启 DSH 后生效）" : ""))
+                              : fix && fix.data
+                                ? React.createElement(
+                                    "div",
+                                    { style: { fontSize: 12, lineHeight: 1.7, color: "var(--dsw-alias-label-secondary)" } },
+                                    React.createElement("div", null, "当前出口 IP: " + (fix.data.currentIp || "?")),
+                                    React.createElement("div", null, "安全组已放行: " + ((fix.data.allowedIps || []).length ? fix.data.allowedIps.join(", ") : "（空）")),
+                                    React.createElement("div", null, fix.data.fixed ? "✅ 修复已执行，新出口 IP 已放行" : fix.data.needsFix ? "❌ 当前 IP 未放行，需要修复" : "✅ 当前 IP 已放行，无需修复"),
+                                    (fix.data.commands || []).length
+                                      ? React.createElement(
+                                          "div",
+                                          { style: { marginTop: 4 } },
+                                          React.createElement("div", { style: hint }, (fix.data.executed ? "已执行" : "将执行") + "（" + (fix.data.region || "?") + " / " + (fix.data.securityGroupId || "?") + "）:"),
+                                          React.createElement(
+                                            "div",
+                                            { style: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 11, color: "var(--dsw-alias-label-tertiary)", whiteSpace: "pre-wrap", wordBreak: "break-all", marginTop: 2 } },
+                                            (fix.data.commands || []).join("\n")
+                                          ),
+                                          fix.data.executed
+                                            ? React.createElement(
+                                                "div",
+                                                { style: { marginTop: 4 } },
+                                                fix.data.executed.map((e, i) =>
+                                                  React.createElement("div", { key: i, style: { color: e.ok ? "#2e7d32" : "#c0392b", wordBreak: "break-all" } }, "[" + (e.ok ? "✅" : "❌") + "] " + e.cmd + (e.out ? " → " + e.out : ""))
+                                                )
+                                              )
+                                            : null
+                                        )
+                                      : null
+                                  )
+                                : null
+                          )
+                      )
+                    : null,
               scope && snap
                 ? React.createElement(
                     "div",

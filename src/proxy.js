@@ -495,8 +495,19 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
     if (opts.apply && !ipAllowed) {
       const executed = [];
       for (const cmd of commands) {
-        const r = spawnSync("bash", ["-lc", cmd], { encoding: "utf8", timeout: 30_000 });
-        executed.push({ cmd, ok: r.status === 0, out: (r.stdout || r.stderr || "").trim().slice(0, 200) });
+        // Windows 用 cmd /c（aliyun.exe 可直接执行），POSIX 用 bash -lc（aliyun 多为 shell 包装）
+        const argv = isWin ? [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", cmd]] : ["bash", ["-lc", cmd]];
+        const r = spawnSync(argv[0], argv[1], { encoding: "utf8", timeout: 30_000 });
+        const out = (r.stdout || r.stderr || "").trim().slice(0, 200);
+        // 容错：ICMP 规则的 -1/-1 端口在部分 aliyun CLI/API 版本被校验拒绝（InvalidParam.PortRange），
+        // 仅影响 ping（非隧道/SSH 关键规则）→ 记为跳过，不判修复失败。
+        let ok = r.status === 0;
+        let skipped = false;
+        if (!ok && /icmp/i.test(cmd) && /InvalidParam\.PortRange/i.test(out)) {
+          ok = true;
+          skipped = true;
+        }
+        executed.push({ cmd, ok, ...(skipped ? { skipped: true, out: "ICMP 规则被 aliyun CLI/API 拒绝（InvalidParam.PortRange），已跳过（仅影响 ping）" } : { out }) });
       }
       result.executed = executed;
       result.fixed = executed.every((e) => e.ok);

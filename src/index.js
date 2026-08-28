@@ -393,6 +393,49 @@ export function apply(ctx, config) {
     res.end(body);
   };
   const disposeStatusUi = webServer?.register({ kind: "exact", path: "/dsh-bridge/proxy/status-ui", handler: statusUiHandler });
+
+  // ---------- DSH 设置页卡片动作：阿里云安全组修复（仅回环 webServer、免鉴权）----------
+  // GET ?apply=1 或 POST {"apply":true} → 执行修复（放行新出口 IP 并重启代理）；否则只读对比。
+  const fixAliyunHandler = async (req, res) => {
+    const send = (code, obj) => {
+      res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(JSON.stringify(obj));
+    };
+    try {
+      let apply = false;
+      if (req.method === "GET") {
+        apply = new URL(req.url || "/", "http://127.0.0.1").searchParams.get("apply") === "1";
+      } else if (req.method === "POST") {
+        let body = "";
+        for await (const chunk of req) body += chunk;
+        try {
+          apply = !!(body.trim() && JSON.parse(body).apply);
+        } catch {
+          /* 非法 JSON 视为只读 */
+        }
+      }
+      const r = await proxy.aliyun({ apply });
+      if (!r.ok) return send(400, { ok: false, error: r.error });
+      send(200, {
+        ok: true,
+        currentIp: r.currentIp,
+        allowedIps: r.allowedIps,
+        ipAllowed: r.ipAllowed,
+        needsFix: r.needsFix,
+        commands: r.commands,
+        region: r.region,
+        securityGroupId: r.securityGroupId,
+        executed: r.executed ?? null,
+        fixed: r.fixed ?? null,
+      });
+    } catch (e) {
+      send(500, { ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  const disposeFixAliyun = webServer?.register({ kind: "exact", path: "/dsh-bridge/proxy/fix-aliyun", handler: fixAliyunHandler });
   // cordis 4 不派发 "dispose" 事件，同样改用 effect 注册销毁回调
-  ctx.effect(() => () => disposeStatusUi?.());
+  ctx.effect(() => () => {
+    disposeStatusUi?.();
+    disposeFixAliyun?.();
+  });
 }
