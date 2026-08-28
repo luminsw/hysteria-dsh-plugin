@@ -7,8 +7,7 @@
 > 百花是提供本机/局域网能力的家庭服务端（知识库、家庭数据、本地 AI），DSH 是编排与交互面，
 > 本插件负责给这同一台机器上的开发任务提供网络兜底。
 > 同族插件见 [`baihua-dsh-plugin`](https://github.com/luminsw/baihua-dsh-plugin)（百花 Web → DSH 桥）、
-> [`baihua-local-ai-dsh-plugin`](https://github.com/luminsw/baihua-local-ai-dsh-plugin)（DSH → 百花本地 AI）、
-> [`baihua-mcp-server`](https://github.com/luminsw/baihua-mcp-server)（百花 → MCP 客户端）。
+> [`baihua-local-ai-dsh-plugin`](https://github.com/luminsw/baihua-local-ai-dsh-plugin)（DSH → 百花本地 AI）。
 
 ## 它管理什么
 
