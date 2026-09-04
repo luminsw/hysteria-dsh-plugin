@@ -14,7 +14,6 @@
  */
 import z from "@deepseek-ai/schemastery";
 import { defineTool } from "@deepseek-ai/dsh-tools";
-import { settingsNamespace, installSettingsSection } from "@deepseek-ai/dsh-settings";
 import { createProxyOps } from "./proxy.js";
 import { startAutoProxy } from "./autoproxy.js";
 import { spawnSync } from "node:child_process";
@@ -22,7 +21,7 @@ import { spawnSync } from "node:child_process";
 export const name = "dsh-hysteria-proxy";
 
 /** DSH 设置页插件卡片命名空间（客户端卡片以同名 key 注册）。 */
-const SETTINGS_NS = settingsNamespace("hysteria");
+const SETTINGS_NS = "hysteria";
 
 export const inject = ["tools", "webServer"];
 
@@ -112,11 +111,13 @@ export const Config = z.object({
 export function apply(ctx, config) {
   // settings 命名空间：用户表单覆盖会重绑 current，运行时（proxy）始终读最新值（修 setSource no-op bug）。
   let current = () => config;
-  installSettingsSection(ctx, SETTINGS_NS, Config, config, {
-    setSource: (source) => {
-      current = source;
-    },
-    onChange: () => {},
+  ctx.inject(["settings"], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, SETTINGS_NS, Config, config, {
+      setSource: (source) => {
+        current = source;
+      },
+      onChange: () => {},
+    });
   });
   const cfg = () => current();
   const proxy = createProxyOps(() => current());
