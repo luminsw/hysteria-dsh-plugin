@@ -19,22 +19,33 @@ const KILL_GRACE_MS = 3_000;
 
 const isWin = process.platform === "win32";
 
-/** 进程是否存活：win32 用 tasklist，POSIX 用 ps。 */
-function isAlive(pid) {
+/** 进程是否存活：win32 用 tasklist（可核对镜像名防 PID 复用误判），POSIX 用 ps。 */
+function isAlive(pid, expectImage) {
   if (!pid) return false;
   if (isWin) {
     const r = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8" });
-    return r.status === 0 && r.stdout.includes(String(pid));
+    if (r.status !== 0) return false;
+    // 只按「PID 存在」判断有误报风险：PID 被系统回收复用后（重启/进程退出）会指向别的进程，
+    // 导致 stale pid 误判为「运行中」、端口却没监听。必须核对 CSV 首列镜像名
+    // （如 "hysteria-windows-amd64.exe" / "node.exe"）。
+    const line = r.stdout
+      .split("\n")
+      .map((s) => s.trim())
+      .find((l) => l.includes(`"${pid}"`));
+    if (!line) return false;
+    if (!expectImage) return true;
+    const image = (line.match(/^"([^"]+)"/) || [])[1] || "";
+    return expectImage.test(image);
   }
   const r = spawnSync("ps", ["-p", String(pid), "-o", "pid="], { encoding: "utf8" });
   return r.status === 0 && !!r.stdout.trim();
 }
 
-/** Windows 专用：读 pid 文件（hysteria.pid / auth-proxy.pid，与 start.ps1 一致）+ 存活校验。 */
-function pidsFromPidFile(homeDir, file) {
+/** Windows 专用：读 pid 文件（hysteria.pid / auth-proxy.pid，与 start.ps1 一致）+ 存活校验（核对镜像名）。 */
+function pidsFromPidFile(homeDir, file, expectImage) {
   try {
     const pid = Number(String(readFileSync(join(homeDir, file), "utf8")).trim());
-    return Number.isInteger(pid) && pid > 0 && isAlive(pid) ? [pid] : [];
+    return Number.isInteger(pid) && pid > 0 && isAlive(pid, expectImage) ? [pid] : [];
   } catch {
     return [];
   }
@@ -104,7 +115,7 @@ function readAuthCreds(pyPath) {
  * start.sh 用相对路径（-c config.yaml），插件用绝对路径（-c <home>/config.yaml），两种都覆盖。
  */
 function findHysteriaPids(home) {
-  if (isWin) return pidsFromPidFile(expandHome(home), "hysteria.pid");
+  if (isWin) return pidsFromPidFile(expandHome(home), "hysteria.pid", /hysteria/i);
   const r = spawnSync("pgrep", ["-f", "[h]ysteria client -c .*config\\.ya?ml"], { encoding: "utf8" });
   if (r.status !== 0) return [];
   return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean).map(Number);
@@ -112,7 +123,7 @@ function findHysteriaPids(home) {
 
 /** 按命令行特征找 auth-proxy 进程（兼容内置 Node authproxy.js 与旧 python3 auth-proxy.py；同样防自匹配）。 */
 function findAuthProxyPids(home) {
-  if (isWin) return pidsFromPidFile(expandHome(home), "auth-proxy.pid");
+  if (isWin) return pidsFromPidFile(expandHome(home), "auth-proxy.pid", /^node(\.exe)?$/i);
   const r = spawnSync("pgrep", ["-f", "[a]uthproxy\\.js|[p]ython3 .*[a]uth-proxy\\.py"], { encoding: "utf8" });
   if (r.status !== 0) return [];
   return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean).map(Number);
