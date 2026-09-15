@@ -254,12 +254,32 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
     };
   }
 
-  /** 本机出口 IP（直连 ifconfig.me）。 */
+  /**
+   * 本机出口 IP（直连，多端点依次回退）。
+   *
+   * 原先只用 https://ifconfig.me 单点：国内网络下该站点时常超时/被挡，一旦探测失败，
+   * 整个「出口 IP 对比 / 阿里云安全组修复」就直接报"无法获取本机出口 IP"而无法进行
+   * （本次出口 IP 变化要修安全组时正是这样失败的）。改为多个回显端点依次尝试，
+   * 任一成功即返回；端点覆盖国内可达的（3322/ipip/cip）与境外的（ipify/ipinfo/ifconfig）。
+   */
+  const EGRESS_IP_ENDPOINTS = [
+    "https://ifconfig.me/ip",
+    "http://members.3322.org/dyndns/getip",
+    "https://myip.ipip.net",
+    "https://api.ipify.org",
+    "https://ipinfo.io/ip",
+    "https://cip.cc",
+  ];
+
   function egressIp() {
-    const r = spawnSync("curl", ["-s", "--max-time", "10", "https://ifconfig.me"], { encoding: "utf8", timeout: 12_000 });
-    if (r.status !== 0) return null;
-    const ip = r.stdout.trim();
-    return /^\d+\.\d+\.\d+\.\d+$/.test(ip) ? ip : null;
+    for (const url of EGRESS_IP_ENDPOINTS) {
+      const r = spawnSync("curl", ["-s", "--max-time", "8", url], { encoding: "utf8", timeout: 10_000 });
+      if (r.status !== 0 || !r.stdout) continue;
+      // 部分端点返回整段文本（如 ipip 的"当前 IP：1.2.3.4 来自于：…"、cip.cc 的多行），取其中第一个 IPv4
+      const m = r.stdout.match(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/);
+      if (m && ipv4ToInt(m[1]) != null) return m[1];
+    }
+    return null;
   }
 
   /** IPv4 字符串 → 32 位整数（非法返回 null）。 */
@@ -271,14 +291,17 @@ export function createProxyOps(getConfigOrObj, deps = {}) {
     return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
   }
 
-  /** 经代理的出口 IP（验证代理出口；走 auth 端口带凭据）。 */
+  /** 经代理的出口 IP（验证代理出口；走 auth 端口带凭据）。同样多端点回退。 */
   function proxiedEgressIp() {
     const c = creds();
     const proxyUrl = `http://${c.name}:${c.pass}@127.0.0.1:${authPort}`;
-    const r = spawnSync("curl", ["-s", "--max-time", "15", "-x", proxyUrl, "https://ifconfig.me"], { encoding: "utf8", timeout: 18_000 });
-    if (r.status !== 0) return null;
-    const ip = r.stdout.trim();
-    return /^\d+\.\d+\.\d+\.\d+$/.test(ip) ? ip : null;
+    for (const url of EGRESS_IP_ENDPOINTS) {
+      const r = spawnSync("curl", ["-s", "--max-time", "12", "-x", proxyUrl, url], { encoding: "utf8", timeout: 14_000 });
+      if (r.status !== 0 || !r.stdout) continue;
+      const m = r.stdout.match(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/);
+      if (m && ipv4ToInt(m[1]) != null) return m[1];
+    }
+    return null;
   }
 
   /** 当前状态总览：进程 / 端口 / 连通性 / 出口 IP。 */
