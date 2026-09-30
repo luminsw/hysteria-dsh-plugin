@@ -33,9 +33,36 @@ window.__ModuleLoader__.load({
 
     const fieldLabel = (key) => (FIELDS.find((f) => f.key === key) || {}).label || key;
 
+    /** 宿主托管的配置表单 → 旧版 settingsScope 形状（见 baihua-dsh-plugin 同名函数注释）。 */
+    function hostedScope(read) {
+      const fallback = { status: "unavailable", value: {}, writable: false, mode: "host" };
+      return {
+        getSnapshot: () => {
+          const form = read();
+          return form && form.state ? form.state : fallback;
+        },
+        subscribe: () => () => {},
+        set: (field, value) => {
+          const form = read();
+          return form ? form.mutate([{ op: "set", path: [field], value }]) : Promise.resolve(false);
+        },
+        unset: (field) => {
+          const form = read();
+          return form ? form.mutate([{ op: "unset", path: [field] }]) : Promise.resolve(false);
+        },
+      };
+    }
+
     function HysteriaProxyCard(props) {
-      // props.scope = settingsScope.bind({ namespace: "hysteria" })（host 注入；可能为 null）
-      const scope = props.scope;
+      // summary 只用于行描述兜底（bundle 配置页只渲染 page）
+      if (props.view === "summary") {
+        return React.createElement("span", null, "Hysteria 代理状态 / 出口 IP / 阿里云安全组修复");
+      }
+      const formRef = React.useRef(props.form);
+      formRef.current = props.form;
+      const hasForm = props.form !== undefined && props.form !== null;
+      const hosted = React.useMemo(() => (hasForm ? hostedScope(() => formRef.current) : null), [hasForm]);
+      const scope = props.scope !== undefined ? props.scope : hosted;
       const [data, setData] = useState(null);
       const [err, setErr] = useState(null);
       const [snap, setSnap] = useState(null);
@@ -417,27 +444,23 @@ window.__ModuleLoader__.load({
       name: "dsh-hysteria-proxy-client",
       inject: ["slots"],
       apply(ctx) {
-        // 绑定 hysteria settings namespace（host 提供 settingsScope 服务；缺失时退化为只读状态卡）
-        const settingsScope = ctx.get("settingsScope");
-        let scope = null;
-        if (settingsScope) {
-          try {
-            scope = settingsScope.bind({ namespace: NS });
-            // cordis 4：onDispose 已移除，改用 effect
-            ctx.effect(() => () => {
-              try { scope?.dispose?.(); } catch { /* noop */ }
-            });
-          } catch (e) {
-            console.log("[hysteria] settingsScope.bind 失败，退化为只读状态卡：", e.message);
-          }
-        }
-        ctx.slots.inject("settings.plugin.item", function* () {
+        // DSH 0.2.x：卡片挂在「插件」页里本 bundle 自己的页面上
+        // （plugins.bundle.config，key = 包名）；旧版 settings.plugin.item / settingsScope 已删除。
+        ctx.slots.inject("plugins.bundle.config", function* () {
           yield ctx.slots.register(
             {
-              name: "settings.plugin.item",
-              key: NS,
-              locale: "settings.hysteria",
-              inject: () => ({ scope }),
+              name: "plugins.bundle.config",
+              key: "hysteria-dsh-plugin",
+            },
+            HysteriaProxyCard
+          );
+        });
+        // 本行的「配置」页：宿主经 props.form 下发取值/写回句柄，卡片里的字段表单据此可编辑。
+        ctx.slots.inject("plugins.row.config", function* () {
+          yield ctx.slots.register(
+            {
+              name: "plugins.row.config",
+              key: "hysteria-dsh-plugin#dsh-hysteria-proxy",
             },
             HysteriaProxyCard
           );
